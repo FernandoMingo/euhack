@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routers import (
     activities,
@@ -34,6 +35,21 @@ def create_app(
     app.state.db_path = Path(db_path)
     if initialize_db:
         init_db(db_path=db_path)
+
+    # CORS for local frontend dev. Kuba's UI runs at :3000 by default; mine at
+    # :3001. We allow both so either can call this backend without conflict.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3001",
+        ],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     app.include_router(health.router)
     app.include_router(professionals.router)

@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+
+:root {
+  /* Semantic palette — UI_FEATURES.md §3.1 */
+  --background: #F7F3EC;
+  --foreground: #2F3430;
+  --card: #FFFDF8;
+  --card-foreground: #2F3430;
+  --popover: #FFFDF8;
+  --popover-foreground: #2F3430;
+  --primary: #A9BFA8;
+  --primary-foreground: #2F3430;
+  --secondary: #EFE9DD;
+  --secondary-foreground: #2F3430;
+  --muted: #EFE9DD;
+  --muted-foreground: #6F7A72;
+  --accent: #D7E3EC;
+  --accent-foreground: #2F3430;
+  --destructive: #C77B5A;
+  --border: #E3DED4;
+  --input: #E3DED4;
+  --ring: #A9BFA8;
+
+  /* Accent palette — used through color-mix */
+  --sage: oklch(0.78 0.04 145);
+  --mist: oklch(0.83 0.04 235);
+  --peach: oklch(0.86 0.045 50);
+
+  --radius: 1.25rem;
+
+  --shadow-soft: 0 1px 2px rgba(47, 52, 48, 0.04), 0 8px 24px -8px rgba(47, 52, 48, 0.08);
+  --shadow-float: 0 2px 4px rgba(47, 52, 48, 0.05), 0 20px 40px -16px rgba(47, 52, 48, 0.14);
+}
+
+html {
+  font-family: 'Inter', 'DM Sans', system-ui, sans-serif;
+  font-feature-settings: 'ss01', 'cv11';
+  -webkit-font-smoothing: antialiased;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  min-height: 100dvh;
+}
+
+/* Mapbox baseline */
+@import url('https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.css');
+
+/* Custom pin marker — UI_FEATURES.md §8.1 */
+.cc-pin {
+  width: 36px;
+  height: 36px;
+  border-radius: 9999px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-soft);
+  transition: transform 200ms ease;
+  cursor: pointer;
+}
+.cc-pin:hover {
+  transform: translateY(-2px);
+}
+.cc-pin svg {
+  stroke: var(--muted-foreground);
+  width: 18px;
+  height: 18px;
+}
+
+/* Slow scroll, no hash jump */
+html {
+  scroll-behavior: smooth;
+}
