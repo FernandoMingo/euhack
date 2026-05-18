@@ -50,9 +50,13 @@ export function ProfessionalDashboard() {
       preference_note: draft.preference_note
     };
     try {
-      const updated = await api.patchPreferences(resident.id, preferences);
+      await api.patchPreferences(resident.id, preferences);
       setReferrals((items) =>
-        items.map((item) => (item.resident.id === resident.id ? { ...item, resident: updated.resident } : item))
+        items.map((item) =>
+          item.resident.id === resident.id
+            ? { ...item, resident: { ...item.resident, ...preferences } }
+            : item
+        )
       );
       setSaved(true);
     } catch (err) {

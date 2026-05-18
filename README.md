@@ -1,27 +1,29 @@
 # CivicCircles Prototype
 
-First working CivicCircles demo: calm resident map, GP-created lightweight profile, deterministic activity matching, Circle Reveal after check-in, reflection storage, professional dashboard, and operator approval dashboard.
+Calm resident map, GP-created lightweight profile, activity matching, Circle Reveal after check-in, reflection storage, professional dashboard, operator approval dashboard.
 
 ## Scope
 
 - No real authentication.
 - No real email, payments, clinical records, or production AI.
-- No chat, inbox, feed, public attendee browsing, or people marketplace.
-- Matching ranks activity fit only. It does not rank people by social value.
+- No chat, inbox, feed, or people marketplace.
+- Matching ranks activity fit. Does not rank people by social value.
 
 ## Structure
 
 ```text
-backend/
-  app/main.py
-  app/db.py
-  app/models.py
-  app/seed.py
-  app/matching.py
-  app/routes/
-frontend/
+backend/            ← friend backend (FastAPI + sqlite3 repos)
+  app/api/main.py
+  app/api/routers/demo.py   ← frontend-friendly demo endpoints
+  app/repositories/
+  app/matching/
+  sql/
+  init_db.py
+  seed_demo.py
+old_codex_backend/  ← original Codex SQLModel backend (archived)
+frontend/           ← Next.js TypeScript Tailwind app
   app/
-  components/
+  components/ResidentMapExperience.tsx
   lib/api.ts
 ```
 
@@ -29,59 +31,66 @@ frontend/
 
 ```bash
 cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-cp .env.example .env
-python -m app.seed --reset
-uvicorn app.main:app --reload
+pip install -r requirements.txt
+
+# Initialise DB (creates civiccircles.db)
+python3 init_db.py
+
+# Seed demo data (Sofia + 4 activities + circles + invitations)
+python3 seed_demo.py
+
+# Run
+uvicorn app.api.main:app --factory --reload
+# or
+python3 -m app.api
 ```
 
-Backend runs at `http://127.0.0.1:8000`. If that port is occupied, use another port and set `NEXT_PUBLIC_API_BASE_URL` in `frontend/.env.local`.
+Backend runs at `http://127.0.0.1:8000`.
 
 ## Frontend Setup
 
 ```bash
 cd frontend
-cp .env.example .env.local
 npm install
 npm run dev
 ```
 
-Frontend runs at `http://localhost:3000`.
+Environment variables (optional — create `frontend/.env.local`):
 
-`NEXT_PUBLIC_MAPBOX_TOKEN` is optional. If omitted, the resident screen uses the built-in static fallback map. If present, Mapbox renders the map and the 2D/3D toggle changes pitch and bearing.
+```
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_MAPBOX_TOKEN=pk....
+```
+
+Frontend runs at `http://localhost:3000`.
 
 ## Demo Flow
 
 1. Open `http://localhost:3000`.
-2. Sofia sees the Calm Photography Walk on the map.
-3. Open the invitation card.
-4. Accept the invitation.
-5. Simulate arrival.
-6. Circle Reveal unlocks limited attendee cards.
-7. Open Reflection and save Sofia’s post-event reflection.
-8. Open `/professional` to edit Sofia’s lightweight preferences.
-9. Open `/operator` to review the anonymous graph, ranking, audit checklist, and approve/reject the proposal.
-
-Resident and operator surfaces are intentionally separate:
-
-- Resident view: `http://localhost:3000`
-- Operator view: `http://localhost:3000/operator`
-
-## Seeded Demo Data
-
-- Resident: Sofia, referred by GP Dr. Anna Vermeer.
-- Main activity: Calm Photography Walk, Saturday 10:30, Vondelpark.
-- Circle: Sofia plus Resident A-D.
-- Compatibility signals: Saturday morning, calm outdoor preference, photography/parks overlap, small group comfort, step-free route, alcohol-free preference.
+2. Sofia sees multiple activity markers on the Amsterdam map.
+3. Tap a pin → invitation card opens.
+4. **Join** — accept the invitation.
+5. Click **"Use demo location near meeting point"** to simulate proximity.
+6. **Check in** unlocks (within 50m).
+7. Circle Reveal shows limited attendee cards (first name + icebreaker).
+8. Open Reflection and save Sofia's post-event feedback.
+9. Open `/professional` to view/edit Sofia's preferences.
+10. Open `/operator` to review matching runs and peer ratings.
+11. Click the **Profile** icon (top-right or nav tab) to edit preferences directly.
 
 ## API Smoke Checks
 
 ```bash
 curl http://127.0.0.1:8000/api/resident/me
 curl http://127.0.0.1:8000/api/resident/invitations
-curl -X POST http://127.0.0.1:8000/api/ai/rank-activities \
-  -H "Content-Type: application/json" \
-  -d '{"circle_id":"circle_photo_walk"}'
+curl -X POST http://127.0.0.1:8000/api/activities/act-photo-walk/check-in
+curl http://127.0.0.1:8000/api/activities/act-photo-walk/circle-reveal
 ```
+
+## Seeded Demo Data
+
+- **Resident**: Sofia (`sofia-001`) — Oud-West, Amsterdam.
+- **Professional**: Dr. Anna Vermeer, GP, Oud-West Health Center.
+- **Activities**: Calm Photography Walk (Vondelpark), Quiet Museum Morning (Rijksmuseum), Evening Board Games (OBA), Slow Coffee & Sketching (Café De Wester).
+- **Circle members**: Lena, Tom, Mara, Felix.
+- All activities visible on map with distinct coordinates.

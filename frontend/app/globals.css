@@ -91,3 +91,8 @@ select {
 .mapboxgl-ctrl-attrib {
   opacity: 0.5;
 }
+
+@keyframes cc-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(139,168,160,0.30); }
+  50%       { box-shadow: 0 0 0 9px rgba(139,168,160,0.10); }
+}
