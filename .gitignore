@@ -3,4 +3,9 @@ __pycache__/
 *.pyo
 .venv-libs/
 backend/civiccircles.db
+backend/civiccircles.db-shm
+backend/civiccircles.db-wal
+.env
+.env.*
+.emv
 

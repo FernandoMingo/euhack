@@ -555,6 +555,49 @@ class AuditEventResponse(BaseModel):
     created_at: datetime
 
 
+# ---------- Activity planning (LLM-backed, operator-only) ----------
+
+
+ActivityPlanStatusLiteral = Literal[
+    "draft", "generated", "approved", "rejected", "edited", "failed"
+]
+ActivityPlanDecisionLiteral = Literal["approved", "rejected", "edited"]
+
+
+class ActivityPlanRequest(BaseModel):
+    operator_constraints: dict[str, Any] = Field(default_factory=dict)
+    requested_by: str | None = None
+
+
+class ActivityPlanResponse(BaseModel):
+    id: str
+    circle_id: str
+    template_id: str | None
+    activity_id: str | None
+    status: ActivityPlanStatusLiteral
+    model_provider: str
+    model_name: str
+    prompt_version: str
+    summary_text: str | None
+    requires_review_flags: list[str] = Field(default_factory=list)
+    plan: dict[str, Any] | None = None
+    operator_constraints: dict[str, Any] = Field(default_factory=dict)
+    requested_by: str | None
+    operator_id: str | None
+    decision_reason: str | None
+    edits: dict[str, Any] | None = None
+    failure_reason: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ActivityPlanDecisionRequest(BaseModel):
+    operator_id: str = Field(min_length=1)
+    decision: ActivityPlanDecisionLiteral
+    reason: str | None = None
+    edits: dict[str, Any] | None = None
+
+
 # ---------- Peer ratings (operator/internal-only) ----------
 
 

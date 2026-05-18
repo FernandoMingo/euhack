@@ -314,6 +314,94 @@ existing callers:
 The operator-approval rule remains unchanged: proposed circles do not send
 invitations until they are anchored to an approved concrete activity.
 
+## LLM-backed activity planning (Feature 9)
+
+`ActivityPlanningService` turns a proposed circle into an operator-reviewable
+**activity plan** before the operator commits to a concrete `activities` row.
+The planning prompt is now venue-research-first: the model researches actual
+Rotterdam venues online, picks a feasible option, and returns structured JSON
+with `language="English"`, `venue_research` (selected venue, address, URL,
+sources checked), schedule, accessibility/safety notes, materials, invitation
+copy, rationale, and explicit `requires_review_flags`. The LLM only proposes —
+invitations and real activity rows are still created by humans.
+
+Storage: `sql/005_activity_plans.sql` introduces a dedicated `activity_plans`
+table. The row captures the prompt payload, prompt template version,
+model provider/name, structured response, operator decision, edits, and any
+failure reason. Audit events (`activity_plan.requested`,
+`activity_plan.generated`, `activity_plan.failed`,
+`activity_plan.decision.{approved|rejected|edited}`) are written for every
+state transition.
+
+Privacy guardrails enforced in `ActivityPlanningService`:
+
+- The prompt payload only contains activity template attributes/tags, the
+  circle's `shared_signals_json`, the member count, fixed venue-search context
+  (`city=Rotterdam`, `country=NL`, optional operator-supplied `search_area`),
+  fixed `output_language=English`, the optional concrete-activity row, and
+  operator-provided constraints. No user location data is sent to the LLM;
+  venue search is city/search-area based.
+- The JSON schema requires `language="English"`, and the service rejects and
+  audits any generated response that does not declare English.
+- A defensive substring check blocks serialization if forbidden tokens
+  (`diagnos`, `therapy`, `medication`, `peer_rating`, ...) somehow reach the
+  payload.
+- Peer ratings are never read by this service.
+- A fixed system prompt + pinned `PROMPT_VERSION` + version-pinned JSON
+  schema make the artifact reproducible and auditable.
+
+### LLM client
+
+`OpenAIChatLLMClient` (in `app/services/llm_client.py`) wraps the official
+`openai` Python SDK and reads `OPENAI_API_KEY` from the environment. By
+default it uses the Responses API with OpenAI web search enabled so generated
+plans can cite actual Rotterdam venue research. The API CLI (`python -m
+app.api`) loads `.env` from the current working directory before startup, and
+also accepts `.emv` as a typo-tolerant alias. The `openai` package is an
+optional dependency: importing the module never requires it. Tests inject a
+fake client that records prompts and returns canned JSON, so the service can
+be exercised without network access.
+
+The LLM client is injected at app construction time:
+
+```python
+from app.api.main import create_app
+from app.services import OpenAIChatLLMClient
+
+app = create_app(
+    db_path="backend/civiccircles.db",
+    llm_client=OpenAIChatLLMClient(),  # reads OPENAI_API_KEY
+)
+```
+
+For local development, create a repo-root `.env`:
+
+```bash
+OPENAI_API_KEY=sk-...
+```
+
+Then start the API normally:
+
+```bash
+PYTHONPATH="$(pwd)/backend" python3 -m app.api --host 127.0.0.1 --port 8000
+```
+
+If no LLM client is configured, or if the API key / `openai` package is
+missing, the planning endpoints respond with HTTP 503.
+
+### Operator endpoints
+
+- `POST /api/operator/circles/{circle_id}/activity-plan` —
+  generate and persist a draft plan for a proposed circle. Body:
+  `{"operator_constraints": {...}, "requested_by": "operator_1"}`.
+- `GET /api/operator/activity-plans/{plan_id}` — fetch a persisted plan.
+- `GET /api/operator/circles/{circle_id}/activity-plans` — list plans for a
+  circle.
+- `POST /api/operator/activity-plans/{plan_id}/decision` — record an
+  operator decision (`approved` | `rejected` | `edited`) with optional
+  `edits` and `reason`. Decisions are audited; they do not create real
+  activity rows or send invitations.
+
 ### Running a circle-matching run
 
 ```python
@@ -399,6 +487,9 @@ Current test coverage includes:
   `match_explanations`
 - v2 matching: behavior/comfort score components, fair-grouping unmatched
   explanations, and approved-circle invitation promotion with audit rows
+- LLM-backed activity planning: deterministic prompt assembly, prompt-safety
+  substring guards, fake-client persistence, audit rows for request /
+  generation / failure / operator decision
 
 ## Logging usage
 

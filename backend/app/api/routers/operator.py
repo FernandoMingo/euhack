@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.api import schemas
 from app.api.converters import (
+    activity_plan_to_response,
     audit_event_to_response,
     circle_to_response,
     invitation_to_response,
@@ -24,10 +25,17 @@ from app.api.converters import (
     peer_rating_to_response,
     peer_rollup_to_response,
 )
-from app.api.deps import get_connection
+from app.api.deps import get_connection, get_llm_client
 from app.repositories import ActivityRepository, MatchingRepository, RatingRepository
 from app.repositories.base import parse_dt
-from app.services import MatchingWorkflowService
+from app.services import (
+    ActivityPlanningService,
+    LLMClient,
+    LLMConfigurationError,
+    LLMResponseError,
+    MatchingWorkflowService,
+    PromptSafetyError,
+)
 
 router = APIRouter(prefix="/api/operator", tags=["operator"])
 
@@ -182,6 +190,118 @@ def record_operator_decision(
         decision=payload.decision,
         reason=payload.reason,
     )
+
+
+# ---------- Activity planning (LLM-backed) ----------
+
+
+@router.post(
+    "/circles/{circle_id}/activity-plan",
+    response_model=schemas.ActivityPlanResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def generate_activity_plan(
+    circle_id: str,
+    payload: schemas.ActivityPlanRequest,
+    conn: Connection = Depends(get_connection),
+    llm_client: LLMClient | None = Depends(get_llm_client),
+) -> schemas.ActivityPlanResponse:
+    """Generate an operator-reviewable plan for a proposed circle.
+
+    The plan is persisted as a draft, then the LLM call is made. Whether
+    the call succeeds or fails, the row stays auditable. The plan does
+    not create an `activities` row or send invitations on its own.
+    """
+    if llm_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Activity-planning LLM client is not configured. "
+                "Set OPENAI_API_KEY and inject OpenAIChatLLMClient into "
+                "create_app(...)."
+            ),
+        )
+    service = ActivityPlanningService(conn, llm_client=llm_client)
+    try:
+        result = service.generate_plan_for_circle(
+            circle_id=circle_id,
+            operator_constraints=payload.operator_constraints,
+            requested_by=payload.requested_by,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PromptSafetyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except LLMConfigurationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    except LLMResponseError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        ) from exc
+    return activity_plan_to_response(result.plan)
+
+
+@router.get(
+    "/activity-plans/{plan_id}",
+    response_model=schemas.ActivityPlanResponse,
+)
+def get_activity_plan(
+    plan_id: str,
+    conn: Connection = Depends(get_connection),
+) -> schemas.ActivityPlanResponse:
+    plan = ActivityPlanningService(conn).get_plan(plan_id)
+    if plan is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Activity plan {plan_id} not found",
+        )
+    return activity_plan_to_response(plan)
+
+
+@router.get(
+    "/circles/{circle_id}/activity-plans",
+    response_model=list[schemas.ActivityPlanResponse],
+)
+def list_activity_plans_for_circle(
+    circle_id: str,
+    limit: int = Query(default=20, ge=1, le=100),
+    conn: Connection = Depends(get_connection),
+) -> list[schemas.ActivityPlanResponse]:
+    plans = ActivityPlanningService(conn).list_plans_for_circle(
+        circle_id=circle_id, limit=limit
+    )
+    return [activity_plan_to_response(plan) for plan in plans]
+
+
+@router.post(
+    "/activity-plans/{plan_id}/decision",
+    response_model=schemas.ActivityPlanResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def record_activity_plan_decision(
+    plan_id: str,
+    payload: schemas.ActivityPlanDecisionRequest,
+    conn: Connection = Depends(get_connection),
+) -> schemas.ActivityPlanResponse:
+    service = ActivityPlanningService(conn)
+    try:
+        plan = service.record_operator_decision(
+            plan_id=plan_id,
+            operator_id=payload.operator_id,
+            decision=payload.decision,
+            reason=payload.reason,
+            edits=payload.edits,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return activity_plan_to_response(plan)
 
 
 @router.post(

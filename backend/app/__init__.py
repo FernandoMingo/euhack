@@ -12,6 +12,7 @@ from .matching import (
     UnmatchedResident,
 )
 from .repositories import (
+    ActivityPlanRepository,
     ActivityRepository,
     ActivityTemplateRepository,
     ConsentRepository,
@@ -21,16 +22,24 @@ from .repositories import (
     ReferralRepository,
     ResidentRepository,
 )
-from .services import MatchingWorkflowService, ReferralMatchingWorkflowResult
+from .services import (
+    ActivityPlanningService,
+    MatchingWorkflowService,
+    OpenAIChatLLMClient,
+    ReferralMatchingWorkflowResult,
+)
 
 __all__ = [
     "connect",
     "init_db",
     "configure_logging",
+    "ActivityPlanRepository",
+    "ActivityPlanningService",
     "ActivityRepository",
     "ActivityTemplateRepository",
     "ConsentRepository",
     "MatchingRepository",
+    "OpenAIChatLLMClient",
     "ProfessionalRepository",
     "RatingRepository",
     "ReferralRepository",

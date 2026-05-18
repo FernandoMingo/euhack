@@ -8,9 +8,12 @@ in one place lets each side evolve independently.
 
 from __future__ import annotations
 
+import json
+
 from app.api import schemas
 from app.dataclasses import (
     Activity,
+    ActivityPlan,
     ActivityTemplate,
     AuditEvent,
     AttendanceEvent,
@@ -299,8 +302,6 @@ def match_candidate_to_response(c: MatchCandidate) -> schemas.MatchCandidateResp
 
 
 def audit_event_to_response(a: AuditEvent) -> schemas.AuditEventResponse:
-    import json
-
     return schemas.AuditEventResponse(
         id=a.id,
         actor_type=a.actor_type,
@@ -310,6 +311,52 @@ def audit_event_to_response(a: AuditEvent) -> schemas.AuditEventResponse:
         entity_id=a.entity_id,
         metadata=json.loads(a.metadata_json),
         created_at=a.created_at,
+    )
+
+
+def _safe_loads_object(value: str | None) -> dict | None:
+    if not value:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _safe_loads_list(value: str | None) -> list:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def activity_plan_to_response(p: ActivityPlan) -> schemas.ActivityPlanResponse:
+    return schemas.ActivityPlanResponse(
+        id=p.id,
+        circle_id=p.circle_id,
+        template_id=p.template_id,
+        activity_id=p.activity_id,
+        status=p.status,
+        model_provider=p.model_provider,
+        model_name=p.model_name,
+        prompt_version=p.prompt_version,
+        summary_text=p.summary_text,
+        requires_review_flags=[
+            str(flag) for flag in _safe_loads_list(p.requires_review_flags_json)
+        ],
+        plan=_safe_loads_object(p.response_json),
+        operator_constraints=_safe_loads_object(p.operator_constraints_json) or {},
+        requested_by=p.requested_by,
+        operator_id=p.operator_id,
+        decision_reason=p.decision_reason,
+        edits=_safe_loads_object(p.edits_json),
+        failure_reason=p.failure_reason,
+        created_at=p.created_at,
+        updated_at=p.updated_at,
     )
 
 

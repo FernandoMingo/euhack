@@ -410,6 +410,36 @@ NoiseLevel = Literal["quiet", "moderate", "loud"]
 StructureType = Literal["guided", "self_paced", "mixed"]
 
 
+ActivityPlanStatus = Literal["draft", "generated", "approved", "rejected", "edited", "failed"]
+
+
+@dataclass(slots=True)
+class ActivityPlan:
+    """LLM-generated activity plan draft for an operator to review."""
+
+    id: str
+    circle_id: str
+    status: ActivityPlanStatus
+    model_provider: str
+    model_name: str
+    prompt_version: str
+    prompt_text: str
+    request_payload_json: str
+    requires_review_flags_json: str
+    operator_constraints_json: str
+    created_at: datetime
+    updated_at: datetime
+    template_id: str | None = None
+    activity_id: str | None = None
+    response_json: str | None = None
+    summary_text: str | None = None
+    requested_by: str | None = None
+    operator_id: str | None = None
+    decision_reason: str | None = None
+    edits_json: str | None = None
+    failure_reason: str | None = None
+
+
 @dataclass(slots=True)
 class ActivityTemplate:
     id: str

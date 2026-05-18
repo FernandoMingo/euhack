@@ -72,6 +72,7 @@ Feature-by-feature, with file references and commits.
 | GP onboarding service + stub verification | `backend/sql/003_onboarding_fields.sql`, `backend/app/services/*.py`, `backend/app/repositories/professional_repository.py`, `backend/app/repositories/consent_repository.py`, `backend/app/repositories/referral_repository.py`, `backend/tests/test_onboarding_service.py` | `0892299` / `842b397` merge |
 | FastAPI HTTP API across core repositories | `backend/app/api/**/*.py`, `backend/requirements.txt`, `backend/tests/test_api_*.py`, `backend/tests/test_onboarding_api.py` | `2b6659a` / `842b397` merge |
 | Behavioral matching v2 + fair grouping workflow slice | `backend/app/matching/behavioral.py`, `backend/app/matching/vectorizer.py`, `backend/app/matching/scoring.py`, `backend/app/matching/engine.py`, `backend/app/matching/grouping.py`, `backend/app/services/matching_service.py`, `backend/tests/test_matching_service.py` | pending |
+| LLM-backed activity planning (operator-reviewable plans) | `backend/sql/005_activity_plans.sql`, `backend/app/services/activity_planning_service.py`, `backend/app/services/llm_client.py`, `backend/app/repositories/activity_plan_repository.py`, `backend/app/api/routers/operator.py`, `backend/tests/test_activity_planning_service.py`, `backend/tests/test_api_activity_planning.py` | pending |
 
 ### Not built yet
 - HTTP/API routes for the matching orchestration service
@@ -114,6 +115,9 @@ euhack/
 │   │   │   ├── engine.py              (activity-ranking orchestrator)
 │   │   │   └── grouping.py            (deterministic circle/group matching v1)
 │   │   ├── services/
+│   │   │   ├── activity_planning_service.py (LLM-backed activity plan drafts)
+│   │   │   ├── llm_client.py            (LLMClient interface + OpenAI impl)
+│   │   │   ├── matching_service.py       (matching workflow orchestration)
 │   │   │   ├── onboarding_service.py  (professional signup + resident referral flow)
 │   │   │   └── verification_service.py (stub AGB/BIG/KvK verification)
 │   │   └── repositories/
@@ -121,6 +125,7 @@ euhack/
 │   │       ├── resident_repository.py
 │   │       ├── activity_repository.py
 │   │       ├── activity_template_repository.py
+│   │       ├── activity_plan_repository.py
 │   │       ├── professional_repository.py
 │   │       ├── consent_repository.py
 │   │       ├── referral_repository.py
@@ -135,7 +140,8 @@ euhack/
 │   │   ├── 002_activity_templates.sql
 │   │   ├── 003_onboarding_fields.sql
 │   │   ├── 003_matching_template_refs.sql
-│   │   └── 004_circle_template_refs.sql
+│   │   ├── 004_circle_template_refs.sql
+│   │   └── 005_activity_plans.sql
 │   └── tests/
 │       ├── test_db_schema.py
 │       ├── test_repositories.py
@@ -149,7 +155,9 @@ euhack/
 │       ├── test_api_residents.py
 │       ├── test_api_activities.py
 │       ├── test_api_invitations_consents.py
-│       └── test_api_operator.py
+│       ├── test_api_operator.py
+│       ├── test_activity_planning_service.py
+│       └── test_api_activity_planning.py
 ```
 
 ---
@@ -171,6 +179,7 @@ Key entities and what they exist for:
 - **Vectorization and similarity**: `resident_feature_weights`, `activity_feature_weights`, `resident_activity_similarity`
 - **Graph signals (activity/group only)**: `graph_edges`, `graph_scores`
 - **Internal peer ratings**: `peer_ratings`, `peer_rating_rollups`, `peer_rating_flags`
+- **LLM-generated planning artifacts**: `activity_plans` (prompt payload + model metadata + structured plan JSON + operator decision)
 - **Safety and audit**: `safety_reports`, `audit_events`
 
 The schema enforces foreign keys, has check constraints on enum values, and uses upsert patterns where appropriate.
@@ -212,6 +221,16 @@ from app import configure_logging
 configure_logging("DEBUG")
 ```
 
+Run the FastAPI app with the LLM-backed activity-planning service:
+```bash
+printf 'OPENAI_API_KEY=sk-...\n' > .env
+PYTHONPATH="$(pwd)/backend" python3 -m app.api --host 127.0.0.1 --port 8000
+```
+The CLI loads `.env` from the repo root (and accepts `.emv` as a
+typo-tolerant alias). If `OPENAI_API_KEY` is unset or `openai` is not
+installed, the planning endpoints respond with HTTP 503 — every other route
+still works.
+
 ---
 
 ## 9. Activity catalog taxonomy
@@ -243,6 +262,52 @@ Each template carries structured attributes used for vectorization:
 
 ## 10. Next feature to build
 
+**Feature 9: LLM-backed operator-reviewable activity plans (built).**
+
+This feature attaches between proposed circles and operator-approved
+concrete activities. `ActivityPlanningService` takes a proposed circle
+(template + shared signals + member count + fixed Rotterdam venue-search
+context + fixed `output_language=English` + optional operator constraints),
+calls the configured LLM with web search enabled, and persists a structured
+English-language plan that the operator must
+explicitly approve / edit / reject before any real activity row is created
+or invitations are sent.
+
+Implemented:
+1. `sql/005_activity_plans.sql` adds a dedicated `activity_plans` table
+   (prompt payload, model identity, prompt version, structured response,
+   operator decision + edits, failure reason).
+2. `ActivityPlan` dataclass + `ActivityPlanRepository`.
+3. `app/services/llm_client.py` exposes a narrow `LLMClient` protocol and
+   `OpenAIChatLLMClient`. The `openai` SDK is imported lazily,
+   `OPENAI_API_KEY` is read from the environment, and OpenAI web search is
+   enabled by default via the Responses API; missing key/package raises
+   `LLMConfigurationError` so failures are explicit.
+4. `ActivityPlanningService` enforces hard guardrails:
+   - the prompt payload is assembled from template attributes/tags, shared
+     availability/interest signals, member count, fixed Rotterdam city
+     context, fixed English output language, optional operator-supplied
+     `search_area`, optional concrete activity row, and operator constraints —
+     never per-resident identifiers or user locations;
+   - a defensive substring check (`diagnos`, `therapy`, `medication`,
+     `peer_rating`, ...) blocks serialization if forbidden tokens reach the
+     payload;
+   - prompts, JSON schema, model identity, English-language response contract,
+     and `venue_research` output are version-pinned;
+   - it never creates `activities` rows and never sends invitations.
+5. Operator endpoints under `/api/operator`:
+   `POST /circles/{id}/activity-plan`, `GET /activity-plans/{id}`,
+   `GET /circles/{id}/activity-plans`,
+   `POST /activity-plans/{id}/decision`.
+6. Audit events: `activity_plan.requested`, `activity_plan.generated`,
+   `activity_plan.failed`, `activity_plan.decision.{approved|rejected|edited}`.
+7. Tests for fake-client persistence, prompt-payload privacy, missing
+   API-key failure, no-side-effects on activities/invitations,
+   failure-path persistence, operator-decision auditing, and the FastAPI
+   endpoints.
+8. `python -m app.api` loads repo-root `.env` / `.emv` files and wires
+   `OpenAIChatLLMClient()` into `create_app`.
+
 **Feature 8: Behavioral signals + matching orchestration service layer.**
 
 The deterministic activity-ranking engine (feature 5), deterministic
@@ -265,6 +330,8 @@ Remaining:
 1. Expose thin HTTP/API routes for the matching workflow service.
 2. Expand operator-dashboard views for proposed circles, unmatched residents,
    and audit explanations.
+3. Production deployments still need secret management for `OPENAI_API_KEY`
+   (local development can use repo-root `.env`; do not commit it).
 
 Group-fit weights in use (feature 6, sum to 1.0):
 - `template_fit`: 0.50
