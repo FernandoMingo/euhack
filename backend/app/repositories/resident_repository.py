@@ -179,3 +179,66 @@ class ResidentRepository(RepositoryBase):
             (status, utc_now_iso(), resident_id),
         )
 
+    def list_preferences(self, *, resident_id: str) -> list[ResidentPreference]:
+        rows = self.fetchall(
+            """
+            SELECT id, resident_id, preference_type, value, created_at
+            FROM resident_preferences
+            WHERE resident_id = ?
+            ORDER BY preference_type, value
+            """,
+            (resident_id,),
+        )
+        return [
+            ResidentPreference(
+                id=row["id"],
+                resident_id=row["resident_id"],
+                preference_type=row["preference_type"],  # type: ignore[arg-type]
+                value=row["value"],
+                created_at=parse_dt(row["created_at"]),  # type: ignore[arg-type]
+            )
+            for row in rows
+        ]
+
+    def list_availabilities(self, *, resident_id: str) -> list[ResidentAvailability]:
+        rows = self.fetchall(
+            """
+            SELECT id, resident_id, weekday, start_time_local, end_time_local, created_at
+            FROM resident_availability
+            WHERE resident_id = ?
+            ORDER BY weekday, start_time_local
+            """,
+            (resident_id,),
+        )
+        return [
+            ResidentAvailability(
+                id=row["id"],
+                resident_id=row["resident_id"],
+                weekday=row["weekday"],  # type: ignore[arg-type]
+                start_time_local=row["start_time_local"],
+                end_time_local=row["end_time_local"],
+                created_at=parse_dt(row["created_at"]),  # type: ignore[arg-type]
+            )
+            for row in rows
+        ]
+
+    def list_avoidances(self, *, resident_id: str) -> list[ResidentAvoidance]:
+        rows = self.fetchall(
+            """
+            SELECT id, resident_id, value, created_at
+            FROM resident_avoidances
+            WHERE resident_id = ?
+            ORDER BY value
+            """,
+            (resident_id,),
+        )
+        return [
+            ResidentAvoidance(
+                id=row["id"],
+                resident_id=row["resident_id"],
+                value=row["value"],
+                created_at=parse_dt(row["created_at"]),  # type: ignore[arg-type]
+            )
+            for row in rows
+        ]
+

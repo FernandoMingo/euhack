@@ -65,12 +65,11 @@ Feature-by-feature, with file references and commits.
 | `.gitignore` for cache/db | `.gitignore` | `6168f9f` |
 | Testing + structured logging | `backend/app/logging_config.py`, `backend/tests/*` | `2f78bfa` |
 | Activity templates catalog (131 activities) | `backend/sql/002_activity_templates.sql`, `backend/data/activity_catalog.json`, `backend/app/seed.py`, `backend/app/repositories/activity_template_repository.py`, `backend/scripts/seed_activity_catalog.py`, `backend/tests/test_activity_templates.py` | `7bf6a6a` |
+| Vectorizer + deterministic matching engine v1 | `backend/sql/003_matching_template_refs.sql`, `backend/app/matching/*.py`, `backend/app/repositories/resident_repository.py`, `backend/tests/test_matching_engine.py` | _(this commit)_ |
 
 ### Not built yet
-- Vectorizer (resident profile → vector, activity template → vector)
-- Deterministic matching engine (cosine + hard constraints + weighted score)
-- Explanation generation per match candidate
-- Service layer composing repositories for end-to-end flows
+- Behavioral signals (recent attendance / feedback decay) in the resident vectorizer
+- Service layer composing repositories + matching engine for end-to-end flows (referral → matching → operator review)
 - HTTP/API layer
 - Frontend
 
@@ -92,6 +91,13 @@ euhack/
 │   │   ├── dataclasses.py             (all domain + model dataclasses)
 │   │   ├── logging_config.py
 │   │   ├── seed.py                    (catalog loader + seeder)
+│   │   ├── matching/
+│   │   │   ├── __init__.py            (public matching API)
+│   │   │   ├── vectorizer.py          (resident + template feature vectors)
+│   │   │   ├── constraints.py         (hard-constraint checks)
+│   │   │   ├── scoring.py             (pure cosine + weighted score)
+│   │   │   ├── explain.py             (summary + structured rationale)
+│   │   │   └── engine.py              (orchestrator: persist + rank)
 │   │   └── repositories/
 │   │       ├── base.py
 │   │       ├── resident_repository.py
@@ -105,12 +111,14 @@ euhack/
 │   │   └── seed_activity_catalog.py   (CLI seeder)
 │   ├── sql/
 │   │   ├── 001_initial_schema.sql
-│   │   └── 002_activity_templates.sql
+│   │   ├── 002_activity_templates.sql
+│   │   └── 003_matching_template_refs.sql
 │   └── tests/
 │       ├── test_db_schema.py
 │       ├── test_repositories.py
 │       ├── test_logging.py
-│       └── test_activity_templates.py
+│       ├── test_activity_templates.py
+│       └── test_matching_engine.py
 ```
 
 ---
@@ -193,42 +201,44 @@ Each template carries structured attributes used for vectorization:
 
 ## 10. Next feature to build
 
-**Feature 5: Vectorizer + deterministic matching engine v1.**
+**Feature 6: Behavioral signals in the resident vectorizer + service layer.**
+
+The deterministic matching engine v1 is now built (see section 5). The next
+work is to feed behavioral signals into the resident vector and to wrap the
+engine in a service layer for end-to-end flows.
 
 Scope:
-1. Convert each activity template into rows in `activity_feature_weights` (one row per feature key per model version).
-2. Convert each resident profile into rows in `resident_feature_weights` from preferences, availability, avoidances, and accessibility needs.
-3. Compute cosine similarity between resident and activity vectors, persist into `resident_activity_similarity` with `algorithm='cosine'` and a `model_version`.
-4. Apply hard constraints (availability, radius, accessibility, cost, avoidances) before scoring.
-5. Persist a `matching_runs` row, with `match_candidates`, `match_feature_scores`, `match_explanations` for the top-N candidates per resident.
-6. Return a ranked list with summary text and structured rationale.
+1. Fold recent attendance and feedback signals into resident feature weights
+   with exponential decay (e.g. `0.95^weeks`).
+2. Add a service layer that composes repositories + `MatchingEngine` for
+   referral acceptance → matching → operator review.
+3. Wire `audit_events` rows around every state transition (referral
+   acceptance, matching run, operator decision).
 
-Suggested file layout:
-- `backend/app/matching/vectorizer.py`
-- `backend/app/matching/constraints.py`
-- `backend/app/matching/scoring.py`
-- `backend/app/matching/engine.py`
-- `backend/app/matching/explain.py`
-- `backend/tests/test_matching_engine.py`
-
-Feature key naming conventions (use these for both residents and activities):
+Feature key naming conventions in use (residents + activity templates):
 - `interest:<value>`
 - `activity_pref:<value>`
-- `avoid:<value>` (encode as negative weight, e.g. -1.0)
+- `avoid:<value>` (negative weight, currently `-1.5`)
 - `access:<value>`
 - `avail:<weekday>_<bucket>` (e.g. `avail:sat_morning`)
 - `social_energy:<low|medium|high>`
-- `group_size:<min>_<max>`
+- `group_size:<n>` (one feature per n in the preferred / typical range)
 - `cost:<band>`
-- `setting:<indoor|outdoor|mixed>`
-- `intensity:<still|light|active|vigorous>`
-- `noise:<quiet|moderate|loud>`
-- `theme:<value>` and `attribute:<value>` (mirror catalog tags)
+- `family:<value>`, `setting:<value>`, `intensity:<value>`,
+  `noise:<value>`, `structure:<value>`, `risk:<value>`
+- `theme:<value>`, `attribute:<value>`, `skill:<value>`, `format:<value>`
+  (mirrored from `activity_template_tags`)
 
-Initial weight model (v1):
+Current weight model (v1):
 - explicit profile features: 1.0
-- recent positive behavior: 1.1–1.3
+- mirrored interest signals derived from `theme:` tags: 1.0
+- mirrored interest signals derived from `attribute:` tags: 0.7
+- title/code token derived interest signals: 0.6
 - strong avoidances: −1.5
+- structure / risk / skill / format features: 0.5
+
+Planned for v2:
+- recent positive behavior: 1.1–1.3
 - exponential decay on old behavior (e.g. `0.95^weeks`)
 
 ---
@@ -237,12 +247,13 @@ Initial weight model (v1):
 
 Current branch `fer/features` history:
 ```
-7bf6a6a feat: add activity templates catalog with 131 seedable activities
-2f78bfa feat: add backend testing and structured logging support
-6168f9f chore: ignore local Python cache and SQLite artifacts
-4a43b16 feat: add repository query layer for SQLite data access
-4c73e6a feat: add SQLite schema and typed backend data models
-4021dc8 Initial commit
+(pending) feat: add vectorizer and deterministic matching engine v1
+7bf6a6a   feat: add activity templates catalog with 131 seedable activities
+2f78bfa   feat: add backend testing and structured logging support
+6168f9f   chore: ignore local Python cache and SQLite artifacts
+4a43b16   feat: add repository query layer for SQLite data access
+4c73e6a   feat: add SQLite schema and typed backend data models
+4021dc8   Initial commit
 ```
 
 Rules:

@@ -1,5 +1,10 @@
 from .db import connect, init_db
 from .logging_config import configure_logging
+from .matching import (
+    DEFAULT_MODEL_VERSION,
+    MatchingEngine,
+    MatchResult,
+)
 from .repositories import (
     ActivityRepository,
     ActivityTemplateRepository,
@@ -17,4 +22,7 @@ __all__ = [
     "ActivityTemplateRepository",
     "MatchingRepository",
     "RatingRepository",
+    "MatchingEngine",
+    "MatchResult",
+    "DEFAULT_MODEL_VERSION",
 ]
