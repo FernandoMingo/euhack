@@ -4,6 +4,7 @@ This backend folder contains the first implementation slice for CivicCircles:
 - SQLite schema
 - Python dataclasses for domain and model artifacts
 - DB initialization helpers
+- repository/query layer on top of `sqlite3`
 
 ## What is implemented
 
@@ -35,6 +36,17 @@ This backend folder contains the first implementation slice for CivicCircles:
 - File: `init_db.py`
   - CLI entrypoint to create/init the database.
 
+### 4) Repository/query layer
+- Package: `app/repositories`
+- Includes:
+  - `ResidentRepository`
+  - `ActivityRepository`
+  - `MatchingRepository`
+  - `RatingRepository`
+- Purpose:
+  - centralize SQL access and row-to-dataclass mapping
+  - provide typed methods for common create/read/update operations
+
 ## Quick start
 
 From repository root:
@@ -58,10 +70,31 @@ python3 backend/init_db.py \
 - Internal peer ratings are stored for internal matching/safety quality signals.
 - Peer ratings are intended to be **non-public**; raw pairwise ratings should not be exposed to residents.
 
+## Minimal usage example
+
+```python
+from app import ActivityRepository, ResidentRepository, connect, init_db
+
+init_db()
+with connect() as conn:
+    residents = ResidentRepository(conn)
+    activities = ActivityRepository(conn)
+    sofia = residents.create_resident(
+        first_name="Sofia",
+        email="sofia@example.com",
+        preferred_language="English",
+        city="Amsterdam",
+        social_comfort="small_group_low_pressure",
+        preferred_group_size_min=3,
+        preferred_group_size_max=6,
+        cost_sensitivity="free_or_low_cost",
+    )
+```
+
 ## Next recommended steps
 
-1. Add repository/query layer on top of `sqlite3`.
-2. Add migrations strategy (up/down scripts) after `001_initial_schema.sql`.
-3. Add seed data script for demo persona(s).
-4. Add tests for constraints and matching persistence integrity.
+1. Add migrations strategy (up/down scripts) after `001_initial_schema.sql`.
+2. Add seed data script for demo persona(s).
+3. Add tests for constraints and matching persistence integrity.
+4. Add service layer methods that compose multiple repositories for end-to-end flows.
 
