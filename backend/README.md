@@ -1,25 +1,25 @@
 # CivicCircles Backend Data Layer
 
 This backend folder contains the first implementation slice for CivicCircles:
-- SQLite schema
+- SQLite schema (with migrations directory)
 - Python dataclasses for domain and model artifacts
 - DB initialization helpers
 - repository/query layer on top of `sqlite3`
+- activity templates catalog + seed pipeline
 
 ## What is implemented
 
 ### 1) Database schema
-- File: `sql/001_initial_schema.sql`
-- Includes core entities:
-  - residents, professionals, referrals, consent
+- Directory: `sql/` (migrations applied in filename order)
+- `sql/001_initial_schema.sql`:
+  - core entities: residents, professionals, referrals, consent
   - activities, circles, invitations, attendance, feedback
   - operator decisions, safety reports, audit events
-- Includes recommendation and ranking artifacts:
-  - matching runs and candidate scoring
-  - per-feature score contributions and explanations
-  - resident/activity feature vectors for cosine similarity
-  - graph edges/scores for graph-based ranking
+  - recommendation and ranking artifacts (matching runs, feature scores, similarity, graph)
   - internal peer ratings, rollups, and moderation flags
+- `sql/002_activity_templates.sql`:
+  - `activity_templates` catalog with rich attributes (family, cost, social energy, setting, intensity, noise, structure, risk)
+  - `activity_template_tags` for taxonomy tags used in vectorization
 
 ### 2) Python dataclasses
 - File: `app/dataclasses.py`
@@ -41,6 +41,7 @@ This backend folder contains the first implementation slice for CivicCircles:
 - Includes:
   - `ResidentRepository`
   - `ActivityRepository`
+  - `ActivityTemplateRepository`
   - `MatchingRepository`
   - `RatingRepository`
 - Purpose:
@@ -53,6 +54,18 @@ This backend folder contains the first implementation slice for CivicCircles:
 - Logged areas:
   - database initialization and connection lifecycle in `app/db.py`
   - SQL query operations in `app/repositories/base.py` (debug level)
+  - activity catalog seeding in `app/seed.py`
+
+### 6) Activity templates catalog
+- Data file: `data/activity_catalog.json`
+- Loader: `app/seed.py` (`load_activity_catalog`, `seed_activity_templates`)
+- CLI: `scripts/seed_activity_catalog.py`
+- Each template captures:
+  - identity (`code`, `title`, `description`)
+  - taxonomy (`family`)
+  - attributes used for matching: typical duration, group size, cost band, social energy, setting, intensity, noise level, structure, risk level
+  - free-form `tags` such as `theme:outdoor`, `attribute:creative`, `access:step_free_possible`, `skill:beginner_friendly`
+- Templates power activity vectors (cosine similarity) and activity-to-activity similarity.
 
 ## Quick start
 
@@ -67,7 +80,19 @@ Custom paths:
 ```bash
 python3 backend/init_db.py \
   --db-path backend/civiccircles.db \
-  --schema-path backend/sql/001_initial_schema.sql
+  --schema-path backend/sql
+```
+
+Seed the activity templates catalog (initializes the DB if not skipped):
+
+```bash
+python3 backend/scripts/seed_activity_catalog.py
+```
+
+To seed without re-initializing schema:
+
+```bash
+python3 backend/scripts/seed_activity_catalog.py --skip-init
 ```
 
 ## Notes on ranking and privacy
@@ -124,8 +149,8 @@ init_db()
 
 ## Next recommended steps
 
-1. Add migrations strategy (up/down scripts) after `001_initial_schema.sql`.
-2. Add seed data script for demo persona(s).
-3. Add tests for constraints and matching persistence integrity.
-4. Add service layer methods that compose multiple repositories for end-to-end flows.
+1. Build a vectorizer that converts activity templates and resident profiles into the same feature space.
+2. Persist vectors via `resident_feature_weights` and `activity_feature_weights`.
+3. Add a deterministic matching engine that produces ranked candidates with explanations.
+4. Add a richer migrations strategy (up/down scripts) for production evolution.
 

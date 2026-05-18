@@ -28,8 +28,20 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     return conn
 
 
-def _discover_migrations(schema_dir: Path) -> list[Path]:
-    return sorted(p for p in schema_dir.glob("*.sql"))
+def _resolve_schema_files(schema_path: Path | str | None) -> list[Path]:
+    """
+    Returns the migration files to apply, in order.
+
+    - `None`  -> every `*.sql` in `SCHEMA_DIR`.
+    - dir     -> every `*.sql` in that directory.
+    - file    -> just that file (legacy single-script behavior).
+    """
+    if schema_path is None:
+        return sorted(SCHEMA_DIR.glob("*.sql"))
+    path = Path(schema_path)
+    if path.is_dir():
+        return sorted(path.glob("*.sql"))
+    return [path]
 
 
 def _applied_migrations(conn: sqlite3.Connection) -> set[str]:
@@ -41,47 +53,37 @@ def _applied_migrations(conn: sqlite3.Connection) -> set[str]:
 def init_db(
     db_path: Path | str = DEFAULT_DB_PATH,
     schema_path: Path | str | None = None,
-    schema_dir: Path | str | None = None,
 ) -> None:
     """
-    Initialize the SQLite database by running pending migration scripts in order.
+    Initialize the SQLite database by running migration scripts in order.
 
-    Applied migrations are recorded in `_schema_migrations`, so re-running this
-    function on an existing database only applies new scripts.
+    Applied migrations are recorded in `_schema_migrations` so re-running
+    this function on an existing database only applies new scripts. Each
+    migration is run inside a transaction so a failing script does not
+    leave the database half-migrated.
 
-    If `schema_path` is given, that single script is executed regardless of
-    migration history (legacy behavior preserved for callers that pass it).
-    Otherwise every `*.sql` file in `schema_dir` (default: backend/sql) that
-    hasn't been applied yet is run in lexicographic order.
+    `schema_path` can be a single SQL file (legacy callers), a directory
+    of `*.sql` migration files, or `None` (uses the default `sql/` dir).
     """
-    if schema_path is not None:
-        logger.info("Initializing database at %s using schema %s", db_path, schema_path)
-        schema_sql = Path(schema_path).read_text(encoding="utf-8")
-        with connect(db_path) as conn:
-            conn.executescript(schema_sql)
-        logger.info("Database initialization completed for %s", db_path)
-        return
-
-    resolved_dir = Path(schema_dir) if schema_dir is not None else SCHEMA_DIR
-    migrations = _discover_migrations(resolved_dir)
-    if not migrations:
-        raise FileNotFoundError(f"No migration scripts found in {resolved_dir}")
+    schema_files = _resolve_schema_files(schema_path)
+    if not schema_files:
+        raise FileNotFoundError(f"No schema files found for {schema_path or SCHEMA_DIR}")
 
     logger.info(
-        "Initializing database at %s using migrations from %s",
+        "Initializing database at %s with %d migration file(s)",
         db_path,
-        resolved_dir,
+        len(schema_files),
     )
     with connect(db_path) as conn:
         applied = _applied_migrations(conn)
-        for migration in migrations:
-            if migration.name in applied:
-                logger.debug("Skipping already-applied migration %s", migration.name)
+        for file_path in schema_files:
+            if file_path.name in applied:
+                logger.debug("Skipping already-applied migration %s", file_path.name)
                 continue
-            logger.info("Applying migration %s", migration.name)
-            conn.executescript(migration.read_text(encoding="utf-8"))
+            logger.info("Applying migration %s", file_path.name)
+            conn.executescript(file_path.read_text(encoding="utf-8"))
             conn.execute(
                 "INSERT INTO _schema_migrations (name, applied_at) VALUES (?, ?)",
-                (migration.name, datetime.now(timezone.utc).isoformat()),
+                (file_path.name, datetime.now(timezone.utc).isoformat()),
             )
     logger.info("Database initialization completed for %s", db_path)
