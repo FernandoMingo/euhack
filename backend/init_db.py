@@ -17,8 +17,8 @@ def main() -> None:
     parser.add_argument(
         "--schema-path",
         type=Path,
-        default=Path(__file__).resolve().parent / "sql" / "001_initial_schema.sql",
-        help="Path to the SQL schema file.",
+        default=Path(__file__).resolve().parent / "sql",
+        help="Path to a SQL schema file or directory of migration files.",
     )
     args = parser.parse_args()
     init_db(db_path=args.db_path, schema_path=args.schema_path)
@@ -27,4 +27,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

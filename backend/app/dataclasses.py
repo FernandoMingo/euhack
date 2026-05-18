@@ -379,6 +379,42 @@ class AuditEvent:
     entity_id: str | None = None
 
 
+CostBand = Literal["free", "low", "medium", "high"]
+SocialEnergy = Literal["low", "medium", "high"]
+Setting = Literal["indoor", "outdoor", "mixed"]
+Intensity = Literal["still", "light", "active", "vigorous"]
+NoiseLevel = Literal["quiet", "moderate", "loud"]
+StructureType = Literal["guided", "self_paced", "mixed"]
+
+
+@dataclass(slots=True)
+class ActivityTemplate:
+    id: str
+    code: str
+    title: str
+    description: str
+    family: str
+    typical_duration_minutes: int
+    typical_group_size_min: int
+    typical_group_size_max: int
+    typical_cost_band: CostBand
+    social_energy: SocialEnergy
+    setting: Setting
+    intensity: Intensity
+    noise_level: NoiseLevel
+    structure: StructureType
+    risk_level: ActivityRisk
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass(slots=True)
+class ActivityTemplateTag:
+    id: str
+    template_id: str
+    tag: str
+
+
 @dataclass(slots=True)
 class RankingSnapshot:
     """
