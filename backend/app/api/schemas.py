@@ -9,7 +9,7 @@ format, and the two are free to diverge.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -450,6 +450,108 @@ class MatchCandidateResponse(BaseModel):
     total_score: float
     rank_position: int
     hard_constraints_passed: bool
+    created_at: datetime
+
+
+class MatchingWorkflowRequest(BaseModel):
+    top_n_activities: int = Field(default=5, ge=1, le=50)
+    top_n_groups: int = Field(default=3, ge=1, le=20)
+    min_group_size: int = Field(default=3, ge=2)
+    max_group_size: int = Field(default=6, ge=2)
+
+
+class MatchResultSummaryResponse(BaseModel):
+    template_id: str
+    template_code: str
+    template_title: str
+    total_score: float
+    cosine: float
+    rank_position: int
+    explanation_summary: str
+
+
+class UnmatchedResidentReviewResponse(BaseModel):
+    resident_id: str
+    first_name: str
+    reason: str
+    summary_text: str
+    payload: dict[str, Any]
+
+
+class ProposedGroupReviewResponse(BaseModel):
+    circle: CircleResponse | None
+    member_ids: list[str]
+    fit_score: float
+    shared_availability: list[str]
+    shared_interests: list[str]
+    summary_text: str
+    payload: dict[str, Any]
+
+
+class ProposedCircleDashboardResponse(BaseModel):
+    circle: CircleResponse
+    member_ids: list[str]
+    shared_signals: dict[str, Any]
+
+
+class MatchingWorkflowResponse(BaseModel):
+    referral_id: str
+    activity_ranking_run_id: str
+    top_activity_results: list[MatchResultSummaryResponse]
+    circle_matching_run_id: str | None = None
+    proposed_groups: list[ProposedGroupReviewResponse] = Field(default_factory=list)
+    unmatched_residents: list[UnmatchedResidentReviewResponse] = Field(default_factory=list)
+
+
+class OperatorDecisionRequest(BaseModel):
+    operator_id: str = Field(min_length=1)
+    decision: Literal["approved", "rejected", "edited"]
+    reason: str | None = None
+
+
+class OperatorDecisionResponse(BaseModel):
+    activity_id: str
+    operator_id: str
+    decision: Literal["approved", "rejected", "edited"]
+    reason: str | None
+
+
+class InvitationPromotionResponse(BaseModel):
+    circle_id: str
+    invitations: list[InvitationResponse]
+
+
+class MatchCandidateReviewResponse(BaseModel):
+    candidate_id: str
+    matching_run_id: str
+    resident_id: str | None
+    circle_id: str | None
+    activity_id: str | None
+    total_score: float
+    rank_position: int
+    hard_constraints_passed: bool
+    summary_text: str | None
+    explanation: dict[str, Any] | None
+    created_at: datetime
+
+
+class MatchingRunReviewResponse(BaseModel):
+    matching_run_id: str
+    candidates: list[MatchCandidateReviewResponse]
+
+
+class ProposedCirclesResponse(BaseModel):
+    circles: list[ProposedCircleDashboardResponse]
+
+
+class AuditEventResponse(BaseModel):
+    id: str
+    actor_type: Literal["resident", "professional", "operator", "system"]
+    actor_id: str | None
+    action: str
+    entity_type: str
+    entity_id: str | None
+    metadata: dict[str, Any]
     created_at: datetime
 
 

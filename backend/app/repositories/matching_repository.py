@@ -340,3 +340,35 @@ class MatchingRepository(RepositoryBase):
             for row in rows
         ]
 
+    def list_candidate_review_rows(
+        self,
+        *,
+        matching_run_id: str,
+        limit: int = 100,
+    ):
+        """Return candidates joined with explanations for operator review."""
+        return self.fetchall(
+            """
+            SELECT
+                c.id AS candidate_id,
+                c.matching_run_id,
+                c.resident_id,
+                c.circle_id,
+                c.activity_id,
+                c.total_score,
+                c.rank_position,
+                c.hard_constraints_passed,
+                c.created_at AS candidate_created_at,
+                e.id AS explanation_id,
+                e.summary_text,
+                e.explanation_json,
+                e.created_at AS explanation_created_at
+            FROM match_candidates c
+            LEFT JOIN match_explanations e ON e.match_candidate_id = c.id
+            WHERE c.matching_run_id = ?
+            ORDER BY c.rank_position ASC, c.id
+            LIMIT ?
+            """,
+            (matching_run_id, limit),
+        )
+

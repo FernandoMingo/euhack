@@ -134,6 +134,8 @@ class MatchingWorkflowService:
         decision: str,
         reason: str | None = None,
     ) -> None:
+        if self.activities.get_activity(activity_id) is None:
+            raise ValueError(f"Activity {activity_id} not found")
         decision_id = new_id("operator_decision")
         now = utc_now_iso()
         self.conn.execute(

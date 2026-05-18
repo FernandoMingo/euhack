@@ -9,7 +9,9 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.db import connect  # noqa: E402
 from app.api.main import create_app  # noqa: E402
+from app.seed import seed_activity_templates  # noqa: E402
 
 
 class OperatorApiTests(unittest.TestCase):
@@ -32,6 +34,7 @@ class OperatorApiTests(unittest.TestCase):
                 "big_number": "12345678",
             },
         ).json()
+        self.professional_id = signup["professional"]["id"]
 
         def _refer(first_name: str, email: str) -> str:
             ref = self.client.post(
@@ -162,6 +165,104 @@ class OperatorApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(r.status_code, 400)
+
+    def test_referral_matching_workflow_exposes_review_views(self) -> None:
+        with connect(db_path=self.app.state.db_path) as conn:
+            seed_activity_templates(conn=conn)
+            conn.commit()
+
+        referral_ids = []
+        for idx, first_name in enumerate(("Sofia", "Marco", "Aisha")):
+            response = self.client.post(
+                "/api/referrals",
+                json={
+                    "professional_id": self.professional_id,
+                    "profile": {
+                        "first_name": first_name,
+                        "email": f"{first_name.lower()}@workflow.example.nl",
+                        "preferred_language": "nl",
+                        "city": "Amsterdam",
+                        "social_comfort": "small_group_low_pressure",
+                        "preferred_group_size_min": 2,
+                        "preferred_group_size_max": 4,
+                        "cost_sensitivity": "free_or_low_cost",
+                        "interests": ["photography", "outdoor"],
+                        "activities": ["photography_walk"],
+                        "availability": [
+                            {
+                                "weekday": "sat",
+                                "start_time_local": "09:00",
+                                "end_time_local": "12:00",
+                            }
+                        ],
+                    },
+                },
+            )
+            self.assertEqual(response.status_code, 201, response.text)
+            referral_ids.append(response.json()["referral"]["id"])
+
+        workflow = self.client.post(
+            f"/api/operator/referrals/{referral_ids[0]}/matching-workflow",
+            json={
+                "top_n_activities": 3,
+                "top_n_groups": 2,
+                "min_group_size": 2,
+                "max_group_size": 4,
+            },
+        )
+        self.assertEqual(workflow.status_code, 201, workflow.text)
+        body = workflow.json()
+        self.assertNotEqual(body["activity_ranking_run_id"], "")
+        self.assertGreaterEqual(len(body["top_activity_results"]), 1)
+        self.assertIsNotNone(body["circle_matching_run_id"])
+
+        review = self.client.get(
+            f"/api/operator/matching-runs/{body['circle_matching_run_id']}/review"
+        )
+        self.assertEqual(review.status_code, 200, review.text)
+        candidates = review.json()["candidates"]
+        self.assertGreaterEqual(len(candidates), 1)
+        self.assertTrue(any(c["explanation"] for c in candidates))
+
+        proposed = self.client.get("/api/operator/proposed-circles")
+        self.assertEqual(proposed.status_code, 200, proposed.text)
+        self.assertGreaterEqual(len(proposed.json()["circles"]), 1)
+
+    def test_operator_decision_and_invitation_promotion_are_audited(self) -> None:
+        decision = self.client.post(
+            f"/api/operator/activities/{self.activity_id}/decisions",
+            json={
+                "operator_id": "operator_1",
+                "decision": "approved",
+                "reason": "Looks suitable",
+            },
+        )
+        self.assertEqual(decision.status_code, 201, decision.text)
+
+        circle = self.client.post(
+            f"/api/activities/{self.activity_id}/circles",
+            json={"status": "proposed", "fit_score": 0.8, "shared_signals_json": "{}"},
+        )
+        self.assertEqual(circle.status_code, 201, circle.text)
+        circle_id = circle.json()["id"]
+        for resident_id in (self.resident_a, self.resident_b):
+            member = self.client.post(
+                f"/api/circles/{circle_id}/members",
+                json={"resident_id": resident_id},
+            )
+            self.assertEqual(member.status_code, 201, member.text)
+
+        promotion = self.client.post(
+            f"/api/operator/circles/{circle_id}/send-invitations?actor_id=operator_1"
+        )
+        self.assertEqual(promotion.status_code, 201, promotion.text)
+        self.assertEqual(len(promotion.json()["invitations"]), 2)
+
+        audit = self.client.get(f"/api/operator/audit-events?entity_id={circle_id}")
+        self.assertEqual(audit.status_code, 200, audit.text)
+        self.assertTrue(
+            any(event["action"] == "circle.invitations_sent" for event in audit.json())
+        )
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ from sqlite3 import Row
 
 from app.dataclasses import (
     Activity,
+    AuditEvent,
     AttendanceEvent,
     Circle,
     CircleMember,
@@ -175,6 +176,41 @@ class ActivityRepository(RepositoryBase):
             created_at=parse_dt(row["created_at"]),  # type: ignore[arg-type]
             updated_at=parse_dt(row["updated_at"]),  # type: ignore[arg-type]
         )
+
+    def list_circles(
+        self,
+        *,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[Circle]:
+        if status is None:
+            rows = self.fetchall(
+                "SELECT * FROM circles ORDER BY created_at DESC, id LIMIT ?",
+                (limit,),
+            )
+        else:
+            rows = self.fetchall(
+                """
+                SELECT * FROM circles
+                WHERE status = ?
+                ORDER BY created_at DESC, id
+                LIMIT ?
+                """,
+                (status, limit),
+            )
+        return [
+            Circle(
+                id=row["id"],
+                activity_id=row["activity_id"],
+                template_id=row["template_id"],
+                status=row["status"],  # type: ignore[arg-type]
+                fit_score=row["fit_score"],
+                shared_signals_json=row["shared_signals_json"],
+                created_at=parse_dt(row["created_at"]),  # type: ignore[arg-type]
+                updated_at=parse_dt(row["updated_at"]),  # type: ignore[arg-type]
+            )
+            for row in rows
+        ]
 
     def update_circle_status(self, *, circle_id: str, status: str) -> None:
         self.execute(
@@ -422,4 +458,43 @@ class ActivityRepository(RepositoryBase):
             (resident_id, resident_id),
         )
         return int(row["count"] if row is not None else 0)
+
+    def list_audit_events(
+        self,
+        *,
+        entity_type: str | None = None,
+        entity_id: str | None = None,
+        limit: int = 100,
+    ) -> list[AuditEvent]:
+        conditions: list[str] = []
+        params: list[object] = []
+        if entity_type is not None:
+            conditions.append("entity_type = ?")
+            params.append(entity_type)
+        if entity_id is not None:
+            conditions.append("entity_id = ?")
+            params.append(entity_id)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows = self.fetchall(
+            f"""
+            SELECT * FROM audit_events
+            {where}
+            ORDER BY created_at DESC, id
+            LIMIT ?
+            """,
+            tuple(params + [limit]),
+        )
+        return [
+            AuditEvent(
+                id=row["id"],
+                actor_type=row["actor_type"],  # type: ignore[arg-type]
+                actor_id=row["actor_id"],
+                action=row["action"],
+                entity_type=row["entity_type"],
+                entity_id=row["entity_id"],
+                metadata_json=row["metadata_json"],
+                created_at=parse_dt(row["created_at"]),  # type: ignore[arg-type]
+            )
+            for row in rows
+        ]
 

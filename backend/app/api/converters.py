@@ -12,6 +12,7 @@ from app.api import schemas
 from app.dataclasses import (
     Activity,
     ActivityTemplate,
+    AuditEvent,
     AttendanceEvent,
     Circle,
     CircleMember,
@@ -294,6 +295,21 @@ def match_candidate_to_response(c: MatchCandidate) -> schemas.MatchCandidateResp
         rank_position=c.rank_position,
         hard_constraints_passed=c.hard_constraints_passed,
         created_at=c.created_at,
+    )
+
+
+def audit_event_to_response(a: AuditEvent) -> schemas.AuditEventResponse:
+    import json
+
+    return schemas.AuditEventResponse(
+        id=a.id,
+        actor_type=a.actor_type,
+        actor_id=a.actor_id,
+        action=a.action,
+        entity_type=a.entity_type,
+        entity_id=a.entity_id,
+        metadata=json.loads(a.metadata_json),
+        created_at=a.created_at,
     )
 
 
