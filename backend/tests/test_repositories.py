@@ -19,7 +19,7 @@ from app import (  # noqa: E402
 
 class TestRepositories(unittest.TestCase):
     def test_resident_activity_matching_rating_flow(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             init_db(db_path=db_path)
 

@@ -75,6 +75,10 @@ This backend folder contains the first implementation slice for CivicCircles:
 From repository root:
 
 ```bash
+python3 -m pip install -r backend/requirements.txt
+```
+
+```bash
 python3 backend/init_db.py
 ```
 

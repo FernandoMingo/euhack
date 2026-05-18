@@ -12,7 +12,7 @@ from app import connect, init_db  # noqa: E402
 
 class TestDatabaseSchema(unittest.TestCase):
     def test_schema_creates_expected_tables(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             init_db(db_path=db_path)
             with connect(db_path=db_path) as conn:
@@ -37,7 +37,7 @@ class TestDatabaseSchema(unittest.TestCase):
             self.assertIn(table, table_names)
 
     def test_foreign_keys_enabled(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             init_db(db_path=db_path)
             with connect(db_path=db_path) as conn:

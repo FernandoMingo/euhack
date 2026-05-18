@@ -8,8 +8,11 @@ from .matching import (
 from .repositories import (
     ActivityRepository,
     ActivityTemplateRepository,
+    ConsentRepository,
     MatchingRepository,
+    ProfessionalRepository,
     RatingRepository,
+    ReferralRepository,
     ResidentRepository,
 )
 
@@ -17,11 +20,14 @@ __all__ = [
     "connect",
     "init_db",
     "configure_logging",
-    "ResidentRepository",
     "ActivityRepository",
     "ActivityTemplateRepository",
+    "ConsentRepository",
     "MatchingRepository",
+    "ProfessionalRepository",
     "RatingRepository",
+    "ReferralRepository",
+    "ResidentRepository",
     "MatchingEngine",
     "MatchResult",
     "DEFAULT_MODEL_VERSION",

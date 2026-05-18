@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 ResidentStatus = Literal["active", "paused", "withdrawn"]
 VerificationStatus = Literal["pending", "approved", "rejected"]
+VerificationOutcome = Literal["passed", "failed"]
+CaptureMethod = Literal["in_consult", "self_completion"]
 ReferralStatus = Literal["submitted", "accepted", "closed"]
 ConsentStatus = Literal["active", "revoked"]
 ActivityRisk = Literal["low", "medium", "high"]
@@ -50,6 +52,23 @@ class TrustedProfessional:
     verification_status: VerificationStatus
     created_at: datetime
     updated_at: datetime
+    agb_code: str | None = None
+    big_number: str | None = None
+    qualification: str | None = None
+    onderneming_agb_code: str | None = None
+    verified_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class ProfessionalVerification:
+    id: str
+    professional_id: str
+    outcome: VerificationOutcome
+    created_at: datetime
+    agb_response_json: str | None = None
+    big_response_json: str | None = None
+    kvk_response_json: str | None = None
+    failure_reason: str | None = None
 
 
 @dataclass(slots=True)
@@ -98,6 +117,9 @@ class ConsentRecord:
     status: ConsentStatus
     granted_at: datetime
     created_at: datetime
+    consent_text_version: str = "v1.0-nl-2026-05"
+    consent_locale: str = "nl"
+    capture_method: CaptureMethod = "in_consult"
     revoked_at: datetime | None = None
 
 

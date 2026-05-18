@@ -71,7 +71,7 @@ class TestActivityCatalogIntegrity(unittest.TestCase):
 
 class TestSeedActivityTemplates(unittest.TestCase):
     def test_seed_inserts_full_catalog(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             init_db(db_path=db_path)
             with connect(db_path=db_path) as conn:
@@ -92,7 +92,7 @@ class TestSeedActivityTemplates(unittest.TestCase):
                 self.assertIn("attribute:creative", tags)
 
     def test_seed_is_idempotent(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             init_db(db_path=db_path)
             with connect(db_path=db_path) as conn:
@@ -122,7 +122,7 @@ class TestSeedFromTempCatalog(unittest.TestCase):
                 "tags": ["attribute:test"],
             }
         ]
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             catalog_path = Path(tmp_dir) / "catalog.json"
             catalog_path.write_text(json.dumps(sample), encoding="utf-8")
