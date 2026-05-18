@@ -464,6 +464,31 @@ class TestMatchingEngine(unittest.TestCase):
                     self.assertAlmostEqual(r1.breakdown.total, r2.breakdown.total, places=12)
                     self.assertAlmostEqual(r1.breakdown.cosine, r2.breakdown.cosine, places=12)
 
+    def test_run_emits_info_logs_at_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = Path(tmp_dir) / "test.db"
+            init_db(db_path=db_path)
+            with connect(db_path=db_path) as conn:
+                engine, resident_id = self._setup_engine(conn)
+                with self.assertLogs("app.matching.engine", level="INFO") as captured:
+                    engine.run_matching(resident_id=resident_id, top_n=3)
+                logs = "\n".join(captured.output)
+                self.assertIn("matching.run start", logs)
+                self.assertIn("matching.run top", logs)
+                self.assertIn("matching.run end", logs)
+
+    def test_vectorizer_emits_debug_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = Path(tmp_dir) / "test.db"
+            init_db(db_path=db_path)
+            with connect(db_path=db_path) as conn:
+                engine, resident_id = self._setup_engine(conn)
+                with self.assertLogs("app.matching.vectorizer", level="DEBUG") as captured:
+                    engine.run_matching(resident_id=resident_id, top_n=1)
+                logs = "\n".join(captured.output)
+                self.assertIn("vectorizer.resident", logs)
+                self.assertIn("vectorizer.template", logs)
+
     def test_engine_skips_avoidance_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"

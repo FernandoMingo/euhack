@@ -138,6 +138,9 @@ def build_resident_vector(
     avoidances: Iterable[ResidentAvoidance],
 ) -> FeatureVector:
     """Build a sparse feature dict for a resident from their structured state."""
+    preferences = list(preferences)
+    availabilities = list(availabilities)
+    avoidances = list(avoidances)
     feats: dict[str, float] = {}
 
     for pref in preferences:
@@ -173,6 +176,14 @@ def build_resident_vector(
     for band in allowed_cost_bands(resident.cost_sensitivity):
         _set_max(feats, f"cost:{band}", 1.0)
 
+    logger.debug(
+        "vectorizer.resident resident=%s features=%d prefs=%d avails=%d avoids=%d",
+        resident.id,
+        len(feats),
+        len(preferences),
+        len(availabilities),
+        len(avoidances),
+    )
     return FeatureVector(
         owner_id=resident.id,
         owner_kind="resident",
@@ -184,6 +195,7 @@ def build_template_vector(
     template: ActivityTemplate, tags: Iterable[str]
 ) -> FeatureVector:
     """Build a sparse feature dict for an activity template plus its tags."""
+    tags = list(tags)
     feats: dict[str, float] = {}
 
     _set_max(feats, f"family:{_normalize(template.family)}", 1.0)
@@ -224,6 +236,12 @@ def build_template_vector(
     for tok in _tokens_from_phrase(template.code) + _tokens_from_phrase(template.title):
         _set_max(feats, f"interest:{tok}", 0.6)
 
+    logger.debug(
+        "vectorizer.template template=%s features=%d tags=%d",
+        template.code,
+        len(feats),
+        len(tags),
+    )
     return FeatureVector(
         owner_id=template.id,
         owner_kind="activity_template",
