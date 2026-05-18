@@ -47,6 +47,13 @@ This backend folder contains the first implementation slice for CivicCircles:
   - centralize SQL access and row-to-dataclass mapping
   - provide typed methods for common create/read/update operations
 
+### 5) Logging
+- File: `app/logging_config.py`
+- Use `configure_logging()` to set level and formatting.
+- Logged areas:
+  - database initialization and connection lifecycle in `app/db.py`
+  - SQL query operations in `app/repositories/base.py` (debug level)
+
 ## Quick start
 
 From repository root:
@@ -90,6 +97,30 @@ with connect() as conn:
         cost_sensitivity="free_or_low_cost",
     )
 ```
+
+## Running tests
+
+From repository root:
+
+```bash
+python3 -m unittest discover -s backend/tests -p "test_*.py"
+```
+
+Current test coverage includes:
+- schema initialization and key table presence
+- repository happy-path flows across resident/activity/matching/rating data
+- logging behavior for DB initialization and repository query execution
+
+## Logging usage
+
+```python
+from app import configure_logging, init_db
+
+configure_logging("DEBUG")
+init_db()
+```
+
+`INFO` is recommended by default; use `DEBUG` during local development to inspect query-level repository operations.
 
 ## Next recommended steps
 
