@@ -65,7 +65,7 @@ Feature-by-feature, with file references and commits.
 | `.gitignore` for cache/db | `.gitignore` | `6168f9f` |
 | Testing + structured logging | `backend/app/logging_config.py`, `backend/tests/*` | `2f78bfa` |
 | Activity templates catalog (131 activities) | `backend/sql/002_activity_templates.sql`, `backend/data/activity_catalog.json`, `backend/app/seed.py`, `backend/app/repositories/activity_template_repository.py`, `backend/scripts/seed_activity_catalog.py`, `backend/tests/test_activity_templates.py` | `7bf6a6a` |
-| Vectorizer + deterministic matching engine v1 | `backend/sql/003_matching_template_refs.sql`, `backend/app/matching/*.py`, `backend/app/repositories/resident_repository.py`, `backend/tests/test_matching_engine.py` | _(this commit)_ |
+| Vectorizer + deterministic matching engine v1 | `backend/sql/003_matching_template_refs.sql`, `backend/app/matching/*.py`, `backend/app/repositories/resident_repository.py`, `backend/tests/test_matching_engine.py` | `e3525b8` |
 
 ### Not built yet
 - Behavioral signals (recent attendance / feedback decay) in the resident vectorizer
@@ -247,13 +247,13 @@ Planned for v2:
 
 Current branch `fer/features` history:
 ```
-(pending) feat: add vectorizer and deterministic matching engine v1
-7bf6a6a   feat: add activity templates catalog with 131 seedable activities
-2f78bfa   feat: add backend testing and structured logging support
-6168f9f   chore: ignore local Python cache and SQLite artifacts
-4a43b16   feat: add repository query layer for SQLite data access
-4c73e6a   feat: add SQLite schema and typed backend data models
-4021dc8   Initial commit
+e3525b8 feat: add vectorizer and deterministic matching engine v1
+7bf6a6a feat: add activity templates catalog with 131 seedable activities
+2f78bfa feat: add backend testing and structured logging support
+6168f9f chore: ignore local Python cache and SQLite artifacts
+4a43b16 feat: add repository query layer for SQLite data access
+4c73e6a feat: add SQLite schema and typed backend data models
+4021dc8 Initial commit
 ```
 
 Rules:
