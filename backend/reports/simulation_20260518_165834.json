@@ -1,0 +1,597 @@
+{
+  "generated_residents": 25,
+  "group_size": 5,
+  "seed": 42,
+  "cohorts": [
+    {
+      "cohort_index": 1,
+      "resident_ids": [
+        "resident_sim_001",
+        "resident_sim_002",
+        "resident_sim_003",
+        "resident_sim_004",
+        "resident_sim_005"
+      ],
+      "top_activity_id": "activity_sim_003",
+      "top_fit_score": 0.5638,
+      "ranked_activities": [
+        {
+          "activity_id": "activity_sim_003",
+          "fit_score": 0.5638,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.09227307494632311,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        },
+        {
+          "activity_id": "activity_002",
+          "fit_score": 0.5579,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.052476189206445055,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        },
+        {
+          "activity_id": "activity_001",
+          "fit_score": 0.5549,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.03245347246403685,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        }
+      ],
+      "top_positive_signals": [
+        "shared_interests",
+        "availability_overlap",
+        "distance_within_radius",
+        "small_group_preference_match"
+      ],
+      "hard_constraints_passed": [
+        "accessibility_checked",
+        "cost_ok",
+        "group_size_safe",
+        "resident_active",
+        "risk_ok"
+      ],
+      "approval_status": "approved",
+      "resident_invitation_stats": [
+        {
+          "resident_id": "resident_sim_001",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_002",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_003",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_004",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_005",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        }
+      ]
+    },
+    {
+      "cohort_index": 2,
+      "resident_ids": [
+        "resident_sim_006",
+        "resident_sim_007",
+        "resident_sim_008",
+        "resident_sim_009",
+        "resident_sim_010"
+      ],
+      "top_activity_id": "activity_sim_003",
+      "top_fit_score": 0.5933,
+      "ranked_activities": [
+        {
+          "activity_id": "activity_sim_003",
+          "fit_score": 0.5933,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.2889524531206128,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        },
+        {
+          "activity_id": "activity_001",
+          "fit_score": 0.5852,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.23490452693571742,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        },
+        {
+          "activity_id": "activity_002",
+          "fit_score": 0.5786,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.19035171097058212,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        }
+      ],
+      "top_positive_signals": [
+        "shared_interests",
+        "availability_overlap",
+        "distance_within_radius",
+        "small_group_preference_match"
+      ],
+      "hard_constraints_passed": [
+        "accessibility_checked",
+        "cost_ok",
+        "group_size_safe",
+        "resident_active",
+        "risk_ok"
+      ],
+      "approval_status": "approved",
+      "resident_invitation_stats": [
+        {
+          "resident_id": "resident_sim_006",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_007",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_008",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_009",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_010",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        }
+      ]
+    },
+    {
+      "cohort_index": 3,
+      "resident_ids": [
+        "resident_sim_011",
+        "resident_sim_012",
+        "resident_sim_013",
+        "resident_sim_014",
+        "resident_sim_015"
+      ],
+      "top_activity_id": "activity_sim_003",
+      "top_fit_score": 0.5699,
+      "ranked_activities": [
+        {
+          "activity_id": "activity_sim_003",
+          "fit_score": 0.5699,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.13282890465701352,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        },
+        {
+          "activity_id": "activity_002",
+          "fit_score": 0.5686,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.12403672675934178,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        },
+        {
+          "activity_id": "activity_001",
+          "fit_score": 0.5648,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.09862919832537782,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        }
+      ],
+      "top_positive_signals": [
+        "shared_interests",
+        "availability_overlap",
+        "distance_within_radius",
+        "small_group_preference_match"
+      ],
+      "hard_constraints_passed": [
+        "accessibility_checked",
+        "cost_ok",
+        "group_size_safe",
+        "resident_active",
+        "risk_ok"
+      ],
+      "approval_status": "approved",
+      "resident_invitation_stats": [
+        {
+          "resident_id": "resident_sim_011",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_012",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_013",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_014",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_015",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        }
+      ]
+    },
+    {
+      "cohort_index": 4,
+      "resident_ids": [
+        "resident_sim_016",
+        "resident_sim_017",
+        "resident_sim_018",
+        "resident_sim_019",
+        "resident_sim_020"
+      ],
+      "top_activity_id": "activity_002",
+      "top_fit_score": 0.5706,
+      "ranked_activities": [
+        {
+          "activity_id": "activity_002",
+          "fit_score": 0.5706,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.1371555765924169,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        },
+        {
+          "activity_id": "activity_sim_003",
+          "fit_score": 0.5656,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.10429132906584741,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        },
+        {
+          "activity_id": "activity_001",
+          "fit_score": 0.562,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.07980942816069121,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        }
+      ],
+      "top_positive_signals": [
+        "shared_interests",
+        "availability_overlap",
+        "distance_within_radius",
+        "small_group_preference_match"
+      ],
+      "hard_constraints_passed": [
+        "accessibility_checked",
+        "cost_ok",
+        "group_size_safe",
+        "resident_active",
+        "risk_ok"
+      ],
+      "approval_status": "approved",
+      "resident_invitation_stats": [
+        {
+          "resident_id": "resident_sim_016",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_017",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_018",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_019",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_020",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        }
+      ]
+    },
+    {
+      "cohort_index": 5,
+      "resident_ids": [
+        "resident_sim_021",
+        "resident_sim_022",
+        "resident_sim_023",
+        "resident_sim_024",
+        "resident_sim_025"
+      ],
+      "top_activity_id": "activity_sim_003",
+      "top_fit_score": 0.5739,
+      "ranked_activities": [
+        {
+          "activity_id": "activity_sim_003",
+          "fit_score": 0.5739,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.15907299871476915,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        },
+        {
+          "activity_id": "activity_002",
+          "fit_score": 0.571,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.1399167559678907,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        },
+        {
+          "activity_id": "activity_001",
+          "fit_score": 0.5607,
+          "component_scores": {
+            "interest_overlap_score": 0.0,
+            "availability_score": 1.0,
+            "distance_score": 0.07133665898330152,
+            "comfort_score": 1.0,
+            "intensity_score": 0.9,
+            "feedback_score": 0.6,
+            "group_balance_score": 1.0
+          },
+          "hard_constraints_passed": [
+            "accessibility_checked",
+            "cost_ok",
+            "group_size_safe",
+            "resident_active",
+            "risk_ok"
+          ],
+          "hard_constraints_failed": []
+        }
+      ],
+      "top_positive_signals": [
+        "shared_interests",
+        "availability_overlap",
+        "distance_within_radius",
+        "small_group_preference_match"
+      ],
+      "hard_constraints_passed": [
+        "accessibility_checked",
+        "cost_ok",
+        "group_size_safe",
+        "resident_active",
+        "risk_ok"
+      ],
+      "approval_status": "approved",
+      "resident_invitation_stats": [
+        {
+          "resident_id": "resident_sim_021",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_022",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_023",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_024",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        },
+        {
+          "resident_id": "resident_sim_025",
+          "invite_count": 0,
+          "accepted_for_top_activity": 0
+        }
+      ]
+    }
+  ]
+}
