@@ -70,19 +70,28 @@ Frontend runs at `http://localhost:3000`.
 2. Sofia sees multiple activity markers on the Amsterdam map.
 3. Tap a pin → invitation card opens.
 4. **Join** — accept the invitation.
-5. Click **"Use demo location near meeting point"** to simulate proximity.
-6. **Check in** unlocks (within 50m).
+5. Allow browser location. The demo creates one **Calm Check-in Test** activity at Sofia's initial location.
+6. **Check in** unlocks when Sofia is within 50m.
 7. Circle Reveal shows limited attendee cards (first name + icebreaker).
 8. Open Reflection and save Sofia's post-event feedback.
 9. Open `/professional` to view/edit Sofia's preferences.
-10. Open `/operator` to review matching runs and peer ratings.
+10. Open `/operator` to review the separate operator dashboard.
 11. Click the **Profile** icon (top-right or nav tab) to edit preferences directly.
+
+## Activity Catalog Preferences
+
+Profile preference choices are finite options loaded from `backend/data/activity_catalog.json`.
+If the friend backend catalog changes, copy the updated file into that path before seeding/running.
 
 ## API Smoke Checks
 
 ```bash
 curl http://127.0.0.1:8000/api/resident/me
 curl http://127.0.0.1:8000/api/resident/invitations
+curl http://127.0.0.1:8000/api/catalog/preferences
+curl -X POST http://127.0.0.1:8000/api/demo/nearby-activity \
+  -H "Content-Type: application/json" \
+  -d '{"lat":51.9225,"lng":4.47917}'
 curl -X POST http://127.0.0.1:8000/api/activities/act-photo-walk/check-in
 curl http://127.0.0.1:8000/api/activities/act-photo-walk/circle-reveal
 ```

@@ -25,6 +25,21 @@ export type Resident = {
   preference_note?: string;
 };
 
+export type CatalogOption = {
+  value: string;
+  label: string;
+};
+
+export type PreferenceCatalog = {
+  activity_types: CatalogOption[];
+  interests: CatalogOption[];
+  accessibility_needs: CatalogOption[];
+  social_comfort: CatalogOption[];
+  cost_sensitivity: CatalogOption[];
+  availability: CatalogOption[];
+  avoid: CatalogOption[];
+};
+
 export type Activity = {
   id: string;
   title: string;
@@ -153,6 +168,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   me: () => request<Resident>("/api/resident/me"),
   invitations: () => request<Invitation[]>("/api/resident/invitations"),
+  catalogPreferences: () => request<PreferenceCatalog>("/api/catalog/preferences"),
+  createNearbyActivity: (lat: number, lng: number, force = false) =>
+    request<Invitation>("/api/demo/nearby-activity", {
+      method: "POST",
+      body: JSON.stringify({ lat, lng, force }),
+    }),
   accept: (id: string) =>
     request<{ id: string; status: string; activity_id: string }>(`/api/invitations/${id}/accept`, {
       method: "POST",
@@ -180,7 +201,7 @@ export const api = {
     }),
   referrals: () => request<Referral[]>("/api/professionals/referrals").catch(() => [] as Referral[]),
   patchPreferences: (residentId: string, preferences: Partial<Resident>) =>
-    request<{ saved: boolean; resident_id: string }>(`/api/residents/${residentId}/preferences`, {
+    request<{ saved: boolean; resident_id: string; resident: Resident }>(`/api/residents/${residentId}/preferences`, {
       method: "PATCH",
       body: JSON.stringify({ preferences }),
     }),

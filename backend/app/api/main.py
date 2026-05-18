@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routers import (
     activities,
@@ -32,6 +33,13 @@ def create_app(
     initialize_db: bool = True,
 ) -> FastAPI:
     app = FastAPI(title="CivicCircles API", version="0.2.0")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     app.state.db_path = Path(db_path)
     if initialize_db:
         init_db(db_path=db_path)
@@ -51,3 +59,7 @@ def create_app(
     app.include_router(demo.router)
 
     return app
+
+
+# Uvicorn factory alias: `uvicorn app.api.main:app --factory --reload`.
+app = create_app

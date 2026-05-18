@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Accessibility,
   CalendarDays,
@@ -23,13 +23,32 @@ import {
   Wallet,
   X,
 } from "lucide-react";
-import { Invitation, Reveal, Resident, api } from "@/lib/api";
+import { api } from "@/lib/api";
+import type { CatalogOption, Invitation, PreferenceCatalog, Reveal, Resident } from "@/lib/api";
 
 type MapMode = "2D" | "3D";
 
 const MAPBOX_TOKEN =
-  process.env.NEXT_PUBLIC_MAPBOX_TOKEN ||
-  "pk.eyJ1IjoiamtvbmtsZXdza2kiLCJhIjoiY21wNjloYTN3MG5lbTJ3c2E5MXU4YXkycSJ9.-vyo9RLZNXPEyebVGBi_vg";
+  process.env.NEXT_PUBLIC_MAPBOX_TOKEN || "";
+
+const NEARBY_INVITATION_ID = "inv-sofia-act-demo-near-me";
+
+function devLog(message: string, details?: unknown) {
+  if (process.env.NODE_ENV === "development") {
+    console.log(`[CivicCircles] ${message}`, details ?? "");
+  }
+}
+
+function devWarn(message: string, details?: unknown) {
+  if (process.env.NODE_ENV === "development") {
+    console.warn(`[CivicCircles] ${message}`, details ?? "");
+  }
+}
+
+function hasValidCoordinates(invitation: Invitation): boolean {
+  const location = invitation.activity?.location;
+  return Number.isFinite(location?.lat) && Number.isFinite(location?.lng);
+}
 
 function distanceMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const R = 6371000;
@@ -49,38 +68,84 @@ export function ResidentMapExperience() {
   const [mode, setMode] = useState<MapMode>("2D");
   const [sheetOpen, setSheetOpen] = useState(false);
   const [reveal, setReveal] = useState<Reveal | null>(null);
+  const [catalog, setCatalog] = useState<PreferenceCatalog | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [initialUserLocation, setInitialUserLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [locationDenied, setLocationDenied] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const hasCreatedNearbyActivityRef = useRef(false);
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
-      const [me, invites] = await Promise.all([api.me(), api.invitations()]);
+      const [me, invites, preferenceCatalog] = await Promise.all([
+        api.me(),
+        api.invitations(),
+        api.catalogPreferences(),
+      ]);
+      const validCount = invites.filter(hasValidCoordinates).length;
+      devLog("invitations loaded", { count: invites.length, validCoordinateMarkers: validCount });
+      invites.forEach((invitation) => {
+        if (!hasValidCoordinates(invitation)) {
+          devWarn("invitation missing/invalid coordinates", {
+            id: invitation.id,
+            activity_id: invitation.activity_id,
+            location: invitation.activity?.location,
+          });
+        }
+      });
       setResident(me);
+      setCatalog(preferenceCatalog);
       setInvitations(invites);
-      setSelected((current) => current ?? invites[0] ?? null);
-      if (invites[0]) {
-        setReveal(await api.reveal(invites[0].activity_id));
-      }
+      setSelected((current) => {
+        if (current?.id === NEARBY_INVITATION_ID && !invites.some((item) => item.id === current.id)) {
+          return current;
+        }
+        return (current ? invites.find((item) => item.id === current.id) : null) ?? invites[0] ?? null;
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to load demo");
     }
-  }
+  }, []);
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  useEffect(() => {
     if (typeof navigator !== "undefined" && navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        (pos) => setUserLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        async (pos) => {
+          const location = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          setUserLocation(location);
+          setInitialUserLocation((current) => current ?? location);
+          if (hasCreatedNearbyActivityRef.current) return;
+          hasCreatedNearbyActivityRef.current = true;
+          try {
+            const nearby = await api.createNearbyActivity(location.lat, location.lng);
+            devLog("nearby demo activity created/reused", {
+              invitation_id: nearby.id,
+              location: nearby.activity.location,
+            });
+            const fresh = await api.invitations();
+            devLog("invitations loaded after nearby activity", {
+              count: fresh.length,
+              validCoordinateMarkers: fresh.filter(hasValidCoordinates).length,
+            });
+            setInvitations(fresh);
+            setSelected(fresh.find((item) => item.id === nearby.id) ?? nearby);
+            setSheetOpen(true);
+          } catch (err) {
+            devWarn("nearby demo activity failed", err instanceof Error ? err.message : err);
+          }
+        },
         () => setLocationDenied(true),
         { timeout: 8000 }
       );
     } else {
       setLocationDenied(true);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const distanceToActivity = useMemo(() => {
@@ -95,11 +160,26 @@ export function ResidentMapExperience() {
     distanceToActivity !== null &&
     distanceToActivity <= 50;
 
-  async function choose(invitation: Invitation) {
+  useEffect(() => {
+    if (!selected) return;
+    let cancelled = false;
+    devLog("selected invitation", selected.id);
+    api.reveal(selected.activity_id)
+      .then((nextReveal) => {
+        if (!cancelled) setReveal(nextReveal);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Unable to load circle reveal");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected]);
+
+  const choose = useCallback((invitation: Invitation) => {
     setSelected(invitation);
     setSheetOpen(true);
-    setReveal(await api.reveal(invitation.activity_id));
-  }
+  }, []);
 
   async function mutate(action: "accept" | "decline" | "check-in") {
     if (!selected) return;
@@ -122,13 +202,6 @@ export function ResidentMapExperience() {
     } finally {
       setBusy(null);
     }
-  }
-
-  function useDemoLocation() {
-    if (!selected) return;
-    const { lat, lng } = selected.activity.location;
-    // ~30m offset — within 50m threshold
-    setUserLocation({ lat: lat + 0.00027, lng: lng + 0.00015 });
   }
 
   const greeting = useMemo(() => {
@@ -172,7 +245,7 @@ export function ResidentMapExperience() {
           <div className="pointer-events-auto flex justify-center lg:justify-start">
             <Chip tone="sage">Small group · Hosted · No pressure</Chip>
           </div>
-          {locationDenied && !userLocation && (
+          {locationDenied && !initialUserLocation && (
             <div className="pointer-events-auto rounded-2xl border border-border bg-card/95 px-4 py-3 text-sm text-muted-foreground shadow-soft">
               Location is off. You can still browse invitations, but check-in unlocks near the
               meeting point.
@@ -222,7 +295,7 @@ export function ResidentMapExperience() {
             onAccept={() => mutate("accept")}
             onDecline={() => mutate("decline")}
             onCheckIn={() => mutate("check-in")}
-            onUseDemoLocation={useDemoLocation}
+            hasUserLocation={userLocation !== null}
           />
         ) : (
           <div className="m-auto max-w-xs text-center">
@@ -246,7 +319,7 @@ export function ResidentMapExperience() {
             onAccept={() => mutate("accept")}
             onDecline={() => mutate("decline")}
             onCheckIn={() => mutate("check-in")}
-            onUseDemoLocation={useDemoLocation}
+            hasUserLocation={userLocation !== null}
           />
         ) : null}
       </MobileSheet>
@@ -255,10 +328,11 @@ export function ResidentMapExperience() {
       {profileOpen && resident && (
         <ProfilePanel
           resident={resident}
+          catalog={catalog}
           onClose={() => setProfileOpen(false)}
-          onSaved={() => {
+          onSaved={(updatedResident) => {
+            setResident(updatedResident);
             load();
-            setProfileOpen(false);
           }}
         />
       )}
@@ -283,6 +357,17 @@ function MapStage({
   onSelect: (invitation: Invitation) => void;
   userLocation: { lat: number; lng: number } | null;
 }) {
+  if (!MAPBOX_TOKEN) {
+    return (
+      <FallbackMap
+        invitations={invitations}
+        selected={selected}
+        mode={mode}
+        onSelect={onSelect}
+        userLocation={userLocation}
+      />
+    );
+  }
   return (
     <MapboxMap
       invitations={invitations}
@@ -326,6 +411,8 @@ function MapboxMap({
   const mapRef = useRef<any>(null);
   const markersRef = useRef<any[]>([]);
   const userMarkerRef = useRef<any>(null);
+  const didInitialFitRef = useRef(false);
+  const didSkipInitialSelectionRef = useRef(false);
   const [mapReady, setMapReady] = useState(false);
 
   useEffect(() => {
@@ -374,36 +461,36 @@ function MapboxMap({
     import("mapbox-gl").then((mapboxgl) => {
       if (cancelled) return;
       markersRef.current.forEach((m) => m.remove());
-      markersRef.current = invitations.map((invitation) => {
+      const validInvitations = invitations.filter((invitation) => {
+        const valid = hasValidCoordinates(invitation);
+        if (!valid) {
+          devWarn("skip malformed marker", {
+            id: invitation.id,
+            location: invitation.activity?.location,
+          });
+        }
+        return valid;
+      });
+      devLog("map markers rendered", { count: validInvitations.length });
+      markersRef.current = validInvitations.map((invitation) => {
         const isSelected = selected?.id === invitation.id;
-        const el = document.createElement("button");
-        el.title = invitation.activity.title;
-        el.style.cssText = `
-          width: ${isSelected ? "48px" : "40px"};
-          height: ${isSelected ? "48px" : "40px"};
-          border-radius: 50%;
-          border: 2px solid ${isSelected ? "#2a2520" : "#4a4540"};
-          background: ${isSelected ? "#cdc6b8" : "#ede8df"};
-          box-shadow: 0 3px 10px rgba(0,0,0,0.16), 0 1px 3px rgba(0,0,0,0.10);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-          color: #2a2520;
-          transition: transform 0.15s, box-shadow 0.15s;
-        `;
-        el.innerHTML = activityIcon(invitation.activity.activity_type);
-        el.addEventListener("mouseenter", () => {
-          el.style.transform = "scale(1.1)";
-        });
-        el.addEventListener("mouseleave", () => {
-          el.style.transform = "scale(1)";
-        });
-        el.addEventListener("click", (event) => {
+        const root = document.createElement("div");
+        root.className = "cc-map-marker-root";
+        root.style.zIndex = isSelected ? "5" : "1";
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.title = invitation.activity.title;
+        button.setAttribute("aria-label", invitation.activity.title);
+        button.className = `cc-map-marker-inner${isSelected ? " selected" : ""}`;
+        button.innerHTML = activityIcon(invitation.activity.activity_type);
+        button.addEventListener("click", (event) => {
           event.stopPropagation();
           onSelect(invitation);
         });
-        return new mapboxgl.default.Marker({ element: el })
+        root.appendChild(button);
+
+        return new mapboxgl.default.Marker({ element: root, anchor: "bottom" })
           .setLngLat([invitation.activity.location.lng, invitation.activity.location.lat])
           .addTo(map);
       });
@@ -413,6 +500,21 @@ function MapboxMap({
       cancelled = true;
     };
   }, [invitations, selected, onSelect, mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady || didInitialFitRef.current) return;
+    const coords = invitations
+      .filter(hasValidCoordinates)
+      .map((invitation) => [invitation.activity.location.lng, invitation.activity.location.lat] as [number, number]);
+    if (coords.length === 0) return;
+    didInitialFitRef.current = true;
+    import("mapbox-gl").then((mapboxgl) => {
+      const bounds = new mapboxgl.default.LngLatBounds(coords[0], coords[0]);
+      coords.slice(1).forEach((coord) => bounds.extend(coord));
+      map.fitBounds(bounds, { padding: { top: 160, bottom: 180, left: 80, right: 80 }, maxZoom: 13.2, duration: 600 });
+    });
+  }, [invitations, mapReady]);
 
   // user location marker
   useEffect(() => {
@@ -424,16 +526,8 @@ function MapboxMap({
       if (cancelled) return;
       userMarkerRef.current?.remove();
       const el = document.createElement("div");
-      el.style.cssText = `
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        background: #8ba8a0;
-        border: 3px solid white;
-        box-shadow: 0 0 0 4px rgba(139,168,160,0.30);
-        animation: cc-pulse 2.2s ease-in-out infinite;
-      `;
-      userMarkerRef.current = new mapboxgl.default.Marker({ element: el })
+      el.className = "cc-user-marker";
+      userMarkerRef.current = new mapboxgl.default.Marker({ element: el, anchor: "center" })
         .setLngLat([userLocation.lng, userLocation.lat])
         .addTo(map);
     });
@@ -482,14 +576,95 @@ function MapboxMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !selected) return;
+    if (!didSkipInitialSelectionRef.current && selected.id !== NEARBY_INVITATION_ID) {
+      didSkipInitialSelectionRef.current = true;
+      return;
+    }
+    didSkipInitialSelectionRef.current = true;
+    if (selected.id === NEARBY_INVITATION_ID) {
+      didInitialFitRef.current = true;
+    }
     map.easeTo({
       center: [selected.activity.location.lng, selected.activity.location.lat],
-      zoom: 14,
+      zoom: selected.id === NEARBY_INVITATION_ID ? 15 : 14,
       duration: 800,
     });
-  }, [selected]);
+  }, [selected, mapReady]);
 
   return <div ref={ref} className="h-full w-full bg-secondary/40" />;
+}
+
+function FallbackMap({
+  invitations,
+  selected,
+  mode,
+  onSelect,
+  userLocation,
+}: {
+  invitations: Invitation[];
+  selected: Invitation | null;
+  mode: MapMode;
+  onSelect: (invitation: Invitation) => void;
+  userLocation: { lat: number; lng: number } | null;
+}) {
+  const validInvitations = invitations.filter(hasValidCoordinates);
+  const points = [
+    ...validInvitations.map((invitation) => invitation.activity.location),
+    ...(userLocation ? [userLocation] : []),
+  ];
+  const fallbackBounds = points.length
+    ? {
+        minLat: Math.min(...points.map((point) => point.lat)),
+        maxLat: Math.max(...points.map((point) => point.lat)),
+        minLng: Math.min(...points.map((point) => point.lng)),
+        maxLng: Math.max(...points.map((point) => point.lng)),
+      }
+    : { minLat: 52.34, maxLat: 52.39, minLng: 4.84, maxLng: 4.92 };
+
+  const project = (lat: number, lng: number) => {
+    const latSpan = Math.max(fallbackBounds.maxLat - fallbackBounds.minLat, 0.01);
+    const lngSpan = Math.max(fallbackBounds.maxLng - fallbackBounds.minLng, 0.01);
+    return {
+      left: `${12 + ((lng - fallbackBounds.minLng) / lngSpan) * 76}%`,
+      top: `${82 - ((lat - fallbackBounds.minLat) / latSpan) * 64}%`,
+    };
+  };
+
+  return (
+    <div className={`relative h-full w-full overflow-hidden bg-[#ebe5d8] paper-line ${mode === "3D" ? "map-3d" : ""}`}>
+      <div className="pointer-events-none absolute inset-0 opacity-60">
+        <div className="absolute left-[8%] top-[26%] h-px w-[84%] rotate-[-8deg] bg-foreground/20" />
+        <div className="absolute left-[18%] top-[12%] h-[82%] w-px rotate-[18deg] bg-foreground/15" />
+        <div className="absolute left-[6%] top-[62%] h-px w-[86%] rotate-[5deg] bg-foreground/15" />
+        <div className="absolute left-[62%] top-[6%] h-[88%] w-px rotate-[-12deg] bg-foreground/10" />
+        <div className="absolute left-[24%] top-[30%] h-40 w-52 rounded-[42%] border border-foreground/10 bg-[color-mix(in_oklab,var(--sage)_18%,white)]" />
+        <div className="absolute right-[12%] top-[18%] h-36 w-44 rounded-[45%] border border-foreground/10 bg-[color-mix(in_oklab,var(--mist)_16%,white)]" />
+      </div>
+
+      {validInvitations.map((invitation) => {
+        const position = project(invitation.activity.location.lat, invitation.activity.location.lng);
+        return (
+          <div
+            key={invitation.id}
+            className="cc-fallback-marker-root"
+            style={{ left: position.left, top: position.top, zIndex: selected?.id === invitation.id ? 5 : 1 }}
+          >
+            <button
+              type="button"
+              title={invitation.activity.title}
+              className={`cc-map-marker-inner${selected?.id === invitation.id ? " selected" : ""}`}
+              onClick={() => onSelect(invitation)}
+              dangerouslySetInnerHTML={{ __html: activityIcon(invitation.activity.activity_type) }}
+            />
+          </div>
+        );
+      })}
+
+      {userLocation ? (
+        <div className="cc-fallback-user-marker" style={project(userLocation.lat, userLocation.lng)} />
+      ) : null}
+    </div>
+  );
 }
 
 // ── Invitation card ────────────────────────────────────────────────────────
@@ -503,7 +678,7 @@ function InvitationCard({
   onAccept,
   onDecline,
   onCheckIn,
-  onUseDemoLocation,
+  hasUserLocation,
 }: {
   invitation: Invitation;
   reveal: Reveal | null;
@@ -513,7 +688,7 @@ function InvitationCard({
   onAccept: () => void;
   onDecline: () => void;
   onCheckIn: () => void;
-  onUseDemoLocation: () => void;
+  hasUserLocation: boolean;
 }) {
   const activity = invitation.activity;
   const joined = invitation.status === "accepted";
@@ -532,11 +707,11 @@ function InvitationCard({
   ] as const;
 
   const proximityText =
-    distanceToActivity !== null
-      ? distanceToActivity <= 50
+    !hasUserLocation
+      ? "Location unavailable. Check-in unlocks when your location is available near the meeting point."
+      : distanceToActivity !== null && distanceToActivity <= 50
         ? "You're close enough to check in."
-        : `${Math.round(distanceToActivity)}m away · Circle Reveal unlocks within 50m.`
-      : "Circle Reveal unlocks within 50m of the meeting point.";
+        : `${Math.round(distanceToActivity ?? 0)}m away · Circle Reveal unlocks within 50m.`;
 
   return (
     <div className="space-y-5">
@@ -585,9 +760,18 @@ function InvitationCard({
 
       {/* Action area */}
       {joined ? (
-        <div className="rounded-2xl border border-border bg-[color-mix(in_oklab,var(--sage)_18%,var(--card))] p-4 text-sm">
-          <p className="font-medium text-foreground">You&apos;re in.</p>
-          <p className="mt-1 text-muted-foreground">Attendee details stay hidden until check-in.</p>
+        <div className="space-y-3 rounded-2xl border border-border bg-[color-mix(in_oklab,var(--sage)_18%,var(--card))] p-4 text-sm">
+          <div>
+            <p className="font-medium text-foreground">You&apos;re in.</p>
+            <p className="mt-1 text-muted-foreground">Attendee details stay hidden until check-in.</p>
+          </div>
+          <button
+            onClick={onCheckIn}
+            disabled={busy !== null || !canCheckIn}
+            className="w-full rounded-2xl border border-border bg-card px-4 py-3 text-sm font-medium text-foreground transition hover:bg-secondary disabled:opacity-40"
+          >
+            Check in
+          </button>
         </div>
       ) : declined ? (
         <div className="rounded-2xl border border-border bg-secondary/60 p-4 text-sm">
@@ -630,14 +814,6 @@ function InvitationCard({
           <Navigation className="h-3.5 w-3.5 shrink-0" strokeWidth={1.6} />
           {proximityText}
         </p>
-        {!canCheckIn && (
-          <button
-            onClick={onUseDemoLocation}
-            className="mt-2 inline-flex items-center gap-1.5 rounded-xl border border-border bg-card/80 px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-secondary"
-          >
-            Use demo location near meeting point
-          </button>
-        )}
       </div>
 
       <CircleReveal
@@ -646,7 +822,6 @@ function InvitationCard({
         busy={busy}
         canCheckIn={canCheckIn}
         onCheckIn={onCheckIn}
-        onUseDemoLocation={onUseDemoLocation}
       />
 
       {reveal && !reveal.locked ? (
@@ -673,14 +848,12 @@ function CircleReveal({
   busy,
   canCheckIn,
   onCheckIn,
-  onUseDemoLocation,
 }: {
   reveal: Reveal | null;
   checkedIn: boolean;
   busy: string | null;
   canCheckIn: boolean;
   onCheckIn: () => void;
-  onUseDemoLocation: () => void;
 }) {
   return (
     <section className="space-y-5 rounded-2xl border border-border bg-background/60 p-5">
@@ -721,11 +894,11 @@ function CircleReveal({
               </li>
             </ul>
             <button
-              onClick={canCheckIn ? onCheckIn : onUseDemoLocation}
-              disabled={busy !== null}
+              onClick={onCheckIn}
+              disabled={busy !== null || !canCheckIn}
               className="mt-4 w-full rounded-2xl border border-border bg-secondary/70 px-4 py-2.5 text-sm font-medium text-foreground transition hover:bg-secondary"
             >
-              {canCheckIn ? "Check in now" : "Use demo location near meeting point"}
+              {canCheckIn ? "Check in now" : "Check in unlocks within 50m"}
             </button>
           </>
         ) : (
@@ -763,15 +936,18 @@ function CircleReveal({
 
 function ProfilePanel({
   resident,
+  catalog,
   onClose,
   onSaved,
 }: {
   resident: Resident;
+  catalog: PreferenceCatalog | null;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (resident: Resident) => void;
 }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [contactOpen, setContactOpen] = useState(false);
 
   const [interests, setInterests] = useState<string[]>(resident.interests ?? []);
@@ -780,6 +956,7 @@ function ProfilePanel({
     resident.accessibility_needs ?? []
   );
   const [avoid, setAvoid] = useState<string[]>(resident.avoid ?? []);
+  const [availability, setAvailability] = useState<string[]>(resident.availability ?? []);
   const [socialComfort, setSocialComfort] = useState(resident.social_comfort ?? "");
   const [costSensitivity, setCostSensitivity] = useState(resident.cost_sensitivity ?? "");
   const [groupMin, setGroupMin] = useState(
@@ -789,26 +966,25 @@ function ProfilePanel({
     resident.preferred_group_size?.max ?? resident.preferred_group_size_max ?? 6
   );
 
-  const [newInterest, setNewInterest] = useState("");
-  const [newActivity, setNewActivity] = useState("");
-  const [newAccess, setNewAccess] = useState("");
-  const [newAvoid, setNewAvoid] = useState("");
-
   async function save() {
     setSaving(true);
     setSaveError(null);
+    setSaveMessage(null);
     try {
-      await api.patchPreferences(resident.id, {
+      const response = await api.patchPreferences(resident.id, {
         interests,
         activity_preferences: activityPrefs,
         accessibility_needs: accessibilityNeeds,
         avoid,
+        availability,
         social_comfort: socialComfort,
         cost_sensitivity: costSensitivity,
         preferred_group_size_min: groupMin,
         preferred_group_size_max: groupMax,
       });
-      onSaved();
+      devLog("preference save response", response);
+      setSaveMessage("Preferences saved.");
+      onSaved(response.resident);
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Save failed");
     } finally {
@@ -867,60 +1043,46 @@ function ProfilePanel({
               Your Preferences
             </h3>
 
-            <ChipField
+            {!catalog ? (
+              <p className="rounded-xl border border-border bg-background/60 px-4 py-3 text-sm text-muted-foreground">
+                Loading catalog options...
+              </p>
+            ) : null}
+
+            <OptionGroup
               label="Interests"
-              chips={interests}
-              onRemove={(v) => setInterests(interests.filter((x) => x !== v))}
-              newValue={newInterest}
-              onNewValueChange={setNewInterest}
-              onAdd={() => {
-                if (newInterest.trim()) {
-                  setInterests([...interests, newInterest.trim()]);
-                  setNewInterest("");
-                }
-              }}
+              options={catalog?.interests ?? []}
+              values={interests}
+              onChange={setInterests}
             />
 
-            <ChipField
+            <OptionGroup
               label="Preferred Activities"
-              chips={activityPrefs}
-              onRemove={(v) => setActivityPrefs(activityPrefs.filter((x) => x !== v))}
-              newValue={newActivity}
-              onNewValueChange={setNewActivity}
-              onAdd={() => {
-                if (newActivity.trim()) {
-                  setActivityPrefs([...activityPrefs, newActivity.trim()]);
-                  setNewActivity("");
-                }
-              }}
+              options={catalog?.activity_types ?? []}
+              values={activityPrefs}
+              onChange={setActivityPrefs}
+              tall
             />
 
-            <ChipField
+            <OptionGroup
               label="Accessibility Needs"
-              chips={accessibilityNeeds}
-              onRemove={(v) => setAccessibilityNeeds(accessibilityNeeds.filter((x) => x !== v))}
-              newValue={newAccess}
-              onNewValueChange={setNewAccess}
-              onAdd={() => {
-                if (newAccess.trim()) {
-                  setAccessibilityNeeds([...accessibilityNeeds, newAccess.trim()]);
-                  setNewAccess("");
-                }
-              }}
+              options={catalog?.accessibility_needs ?? []}
+              values={accessibilityNeeds}
+              onChange={setAccessibilityNeeds}
             />
 
-            <ChipField
+            <OptionGroup
+              label="Availability"
+              options={catalog?.availability ?? []}
+              values={availability}
+              onChange={setAvailability}
+            />
+
+            <OptionGroup
               label="Avoid"
-              chips={avoid}
-              onRemove={(v) => setAvoid(avoid.filter((x) => x !== v))}
-              newValue={newAvoid}
-              onNewValueChange={setNewAvoid}
-              onAdd={() => {
-                if (newAvoid.trim()) {
-                  setAvoid([...avoid, newAvoid.trim()]);
-                  setNewAvoid("");
-                }
-              }}
+              options={catalog?.avoid ?? []}
+              values={avoid}
+              onChange={setAvoid}
             />
 
             <div className="space-y-1.5">
@@ -930,10 +1092,11 @@ function ProfilePanel({
                 onChange={(e) => setSocialComfort(e.target.value)}
                 className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground"
               >
-                <option value="one_on_one">One-on-one</option>
-                <option value="small_group_low_pressure">Small group, low pressure</option>
-                <option value="small_group">Small group</option>
-                <option value="larger_group">Larger group</option>
+                {(catalog?.social_comfort ?? []).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -944,9 +1107,11 @@ function ProfilePanel({
                 onChange={(e) => setCostSensitivity(e.target.value)}
                 className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground"
               >
-                <option value="free_or_low_cost">Free or low cost</option>
-                <option value="budget">Budget</option>
-                <option value="flexible">Flexible</option>
+                {(catalog?.cost_sensitivity ?? []).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -982,9 +1147,15 @@ function ProfilePanel({
             </p>
           )}
 
+          {saveMessage && (
+            <p className="rounded-xl border border-border bg-[color-mix(in_oklab,var(--sage)_18%,var(--card))] px-4 py-3 text-sm text-foreground">
+              {saveMessage}
+            </p>
+          )}
+
           <button
             onClick={save}
-            disabled={saving}
+            disabled={saving || !catalog}
             className="w-full rounded-2xl bg-[color-mix(in_oklab,var(--sage)_55%,white)] px-4 py-3 text-sm font-medium text-foreground shadow-soft transition hover:bg-[color-mix(in_oklab,var(--sage)_65%,white)] disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save preferences"}
@@ -1021,57 +1192,53 @@ function LockedField({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ChipField({
+function OptionGroup({
   label,
-  chips,
-  onRemove,
-  newValue,
-  onNewValueChange,
-  onAdd,
+  options,
+  values,
+  onChange,
+  tall = false,
 }: {
   label: string;
-  chips: string[];
-  onRemove: (v: string) => void;
-  newValue: string;
-  onNewValueChange: (v: string) => void;
-  onAdd: () => void;
+  options: CatalogOption[];
+  values: string[];
+  onChange: (values: string[]) => void;
+  tall?: boolean;
 }) {
+  const selected = new Set(values);
+  const toggle = (value: string) => {
+    onChange(selected.has(value) ? values.filter((item) => item !== value) : [...values, value]);
+  };
+
   return (
     <div className="space-y-2">
       <label className="text-sm font-medium text-foreground">{label}</label>
-      <div className="flex flex-wrap gap-1.5">
-        {chips.map((c) => (
-          <span
-            key={c}
-            className="inline-flex items-center gap-1 rounded-full bg-secondary px-3 py-1 text-xs font-medium text-muted-foreground"
-          >
-            {c}
-            <button onClick={() => onRemove(c)} className="ml-0.5 opacity-60 hover:opacity-100">
-              <X className="h-3 w-3" />
-            </button>
-          </span>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={newValue}
-          onChange={(e) => onNewValueChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              onAdd();
-            }
-          }}
-          placeholder="Add…"
-          className="flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground"
-        />
-        <button
-          onClick={onAdd}
-          className="rounded-xl border border-border bg-secondary/70 px-3 py-2 text-sm font-medium text-foreground transition hover:bg-secondary"
-        >
-          Add
-        </button>
+      <div
+        className={`flex flex-wrap gap-1.5 overflow-y-auto rounded-2xl border border-border bg-background/50 p-2 ${
+          tall ? "max-h-56" : "max-h-36"
+        }`}
+      >
+        {options.length ? (
+          options.map((option) => {
+            const active = selected.has(option.value);
+            return (
+              <button
+                key={option.value}
+                type="button"
+                onClick={() => toggle(option.value)}
+                className={`min-h-10 rounded-full border px-3 py-1.5 text-xs font-medium transition ${
+                  active
+                    ? "border-foreground/40 bg-[color-mix(in_oklab,var(--sage)_30%,white)] text-foreground"
+                    : "border-border bg-card/70 text-muted-foreground hover:bg-secondary"
+                }`}
+              >
+                {option.label}
+              </button>
+            );
+          })
+        ) : (
+          <p className="px-2 py-2 text-xs text-muted-foreground">Catalog options unavailable.</p>
+        )}
       </div>
     </div>
   );

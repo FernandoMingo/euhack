@@ -47,8 +47,18 @@ def seed(db_path: Path = DB_PATH) -> None:
 
     # preferences
     for ptype, values in [
-        ("interest", ["photography", "parks", "coffee", "museums"]),
-        ("activity", ["walks", "museum visits", "quiet cafes"]),
+        (
+            "interest",
+            [
+                "theme:outdoor",
+                "theme:nature",
+                "attribute:calm",
+                "attribute:creative",
+                "attribute:cultural",
+                "access:quiet_space",
+            ],
+        ),
+        ("activity", ["photography_walk", "slow_park_walk", "museum_visit", "coffee_meetup"]),
         ("accessibility_need", ["step_free_route"]),
     ]:
         conn.execute(
@@ -70,7 +80,7 @@ def seed(db_path: Path = DB_PATH) -> None:
 
     # avoidances
     conn.execute("DELETE FROM resident_avoidances WHERE resident_id=?", (SOFIA_ID,))
-    for v in ["alcohol", "loud venues", "late night"]:
+    for v in ["alcohol", "loud_venues", "late_night"]:
         conn.execute(
             "INSERT OR IGNORE INTO resident_avoidances (id, resident_id, value, created_at) VALUES (?,?,?,?)",
             (str(uuid.uuid4()), SOFIA_ID, v, _now()),
