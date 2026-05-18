@@ -50,10 +50,7 @@ body {
   min-height: 100dvh;
 }
 
-/* Mapbox baseline */
-@import url('https://api.mapbox.com/mapbox-gl-js/v3.7.0/mapbox-gl.css');
-
-/* Custom pin marker — UI_FEATURES.md §8.1 */
+/* Custom pin marker — UI_FEATURES.md §8.1 (mapbox-gl CSS is imported by MapView.tsx) */
 .cc-pin {
   width: 36px;
   height: 36px;
