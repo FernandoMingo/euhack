@@ -23,15 +23,18 @@ from app.api.routers import (
     templates,
 )
 from app.db import DEFAULT_DB_PATH, init_db
+from app.services.llm_client import LLMClient
 
 
 def create_app(
     *,
     db_path: Path | str = DEFAULT_DB_PATH,
     initialize_db: bool = True,
+    llm_client: LLMClient | None = None,
 ) -> FastAPI:
     app = FastAPI(title="CivicCircles API", version="0.2.0")
     app.state.db_path = Path(db_path)
+    app.state.llm_client = llm_client
     if initialize_db:
         init_db(db_path=db_path)
 

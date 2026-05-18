@@ -19,3 +19,7 @@ coverage/
 coverage.xml
 .coverage
 backend/civiccircles.db
+backend/civiccircles.db-shm
+backend/civiccircles.db-wal
+.env.*
+.emv
