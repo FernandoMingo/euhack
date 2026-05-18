@@ -31,15 +31,22 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from app.dataclasses import ActivityTemplate, MatchCandidate
+from app.matching.behavioral import (
+    BEHAVIORAL_MODEL_VERSION,
+    BehavioralProfile,
+    build_behavioral_profile,
+)
 from app.matching.constraints import ConstraintResult, check_template_constraints
 from app.matching.explain import Explanation, build_explanation
 from app.matching.scoring import (
     ScoreBreakdown,
     availability_overlap_score,
+    behavior_score_from_adjustment,
     cosine_similarity,
     cost_compatibility_score,
     feature_contributions,
     weighted_total,
+    weighted_total_v2,
 )
 from app.matching.vectorizer import (
     DEFAULT_MODEL_VERSION,
@@ -50,7 +57,9 @@ from app.matching.vectorizer import (
     build_template_vector,
     persist_resident_vector,
     persist_template_vector,
+    social_energy_from_comfort,
 )
+from app.repositories.activity_repository import ActivityRepository
 from app.repositories.activity_template_repository import ActivityTemplateRepository
 from app.repositories.matching_repository import MatchingRepository
 from app.repositories.resident_repository import ResidentRepository
@@ -91,12 +100,14 @@ class MatchingEngine:
         residents: ResidentRepository,
         templates: ActivityTemplateRepository,
         matching: MatchingRepository,
+        activities: ActivityRepository | None = None,
         model_version: str = DEFAULT_MODEL_VERSION,
         score_algorithm: str = "cosine_weighted",
     ) -> None:
         self.residents = residents
         self.templates = templates
         self.matching = matching
+        self.activities = activities
         self.model_version = model_version
         self.score_algorithm = score_algorithm
 
@@ -117,8 +128,18 @@ class MatchingEngine:
         availabilities = self.residents.list_availabilities(resident_id=resident_id)
         avoidances = self.residents.list_avoidances(resident_id=resident_id)
 
+        behavioral_profile = BehavioralProfile()
+        if self.model_version == BEHAVIORAL_MODEL_VERSION and self.activities is not None:
+            behavioral_profile = build_behavioral_profile(
+                self.activities.list_behavioral_signal_rows(resident_id=resident.id)
+            )
+
         resident_vector = build_resident_vector(
-            resident, preferences, availabilities, avoidances
+            resident,
+            preferences,
+            availabilities,
+            avoidances,
+            behavioral_features=behavioral_profile.feature_weights,
         )
         if persist_vectors:
             persist_resident_vector(self.matching, resident_vector, self.model_version)
@@ -173,11 +194,27 @@ class MatchingEngine:
             )
             cosine = cosine_similarity(resident_vector.features, template_vector.features)
             cost = cost_compatibility_score(allowed_bands, template.typical_cost_band)
-            breakdown = weighted_total(
-                cosine=cosine,
-                cost_score=cost,
-                availability_score=avail_score,
-            )
+            if self.model_version == BEHAVIORAL_MODEL_VERSION:
+                behavior_score = behavior_score_from_adjustment(
+                    behavioral_profile.adjustment_for(
+                        template_code=template.code,
+                        family=template.family,
+                    )
+                )
+                comfort_score = _comfort_alignment_score(resident=resident, template=template)
+                breakdown = weighted_total_v2(
+                    cosine=cosine,
+                    cost_score=cost,
+                    availability_score=avail_score,
+                    comfort_score=comfort_score,
+                    behavior_score=behavior_score,
+                )
+            else:
+                breakdown = weighted_total(
+                    cosine=cosine,
+                    cost_score=cost,
+                    availability_score=avail_score,
+                )
             contribs = feature_contributions(
                 resident_vector.features, template_vector.features
             )
@@ -275,6 +312,22 @@ class MatchingEngine:
                     feature_score=item.template_vector.features.get(feature_key, 0.0),
                     contribution=contribution,
                 )
+            if item.breakdown.comfort is not None:
+                self.matching.add_feature_score(
+                    match_candidate_id=candidate.id,
+                    feature_key="score:comfort_alignment",
+                    feature_weight=0.15,
+                    feature_score=item.breakdown.comfort,
+                    contribution=0.15 * item.breakdown.comfort,
+                )
+            if item.breakdown.behavior is not None:
+                self.matching.add_feature_score(
+                    match_candidate_id=candidate.id,
+                    feature_key="score:behavior_alignment",
+                    feature_weight=0.10,
+                    feature_score=item.breakdown.behavior,
+                    contribution=0.10 * item.breakdown.behavior,
+                )
 
         explanation = build_explanation(
             template_title=item.template.title,
@@ -309,3 +362,32 @@ class MatchingEngine:
             constraint=item.constraint,
             explanation=explanation,
         )
+
+
+def _comfort_alignment_score(*, resident, template: ActivityTemplate) -> float:
+    """Return a bounded comfort score from social, group-size, noise and risk fit."""
+    scores: list[float] = []
+
+    overlap_min = max(resident.preferred_group_size_min, template.typical_group_size_min)
+    overlap_max = min(resident.preferred_group_size_max, template.typical_group_size_max)
+    scores.append(1.0 if overlap_min <= overlap_max else 0.0)
+
+    resident_energy = social_energy_from_comfort(resident.social_comfort)
+    energy_order = {"low": 0, "medium": 1, "high": 2}
+    distance = abs(energy_order[resident_energy] - energy_order[template.social_energy])
+    scores.append(max(0.0, 1.0 - distance * 0.35))
+
+    if resident_energy == "low" and template.noise_level == "loud":
+        scores.append(0.2)
+    elif resident_energy == "low" and template.noise_level == "moderate":
+        scores.append(0.7)
+    else:
+        scores.append(1.0)
+
+    if template.risk_level == "low":
+        scores.append(1.0)
+    elif template.risk_level == "medium":
+        scores.append(0.7)
+    else:
+        scores.append(0.3)
+    return sum(scores) / len(scores)

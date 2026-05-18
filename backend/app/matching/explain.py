@@ -95,4 +95,8 @@ def build_explanation(
             "reasons": list(reasons),
         },
     }
+    if breakdown.comfort is not None:
+        payload["score_breakdown"]["comfort_alignment"] = round(breakdown.comfort, 6)
+    if breakdown.behavior is not None:
+        payload["score_breakdown"]["behavior_alignment"] = round(breakdown.behavior, 6)
     return Explanation(summary_text=summary, payload=payload)

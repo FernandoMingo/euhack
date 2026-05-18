@@ -17,6 +17,12 @@ _W_COSINE = 0.70
 _W_AVAILABILITY = 0.15
 _W_COST = 0.15
 
+_W_V2_COSINE = 0.55
+_W_V2_AVAILABILITY = 0.10
+_W_V2_COST = 0.10
+_W_V2_COMFORT = 0.15
+_W_V2_BEHAVIOR = 0.10
+
 
 @dataclass(slots=True, frozen=True)
 class ScoreBreakdown:
@@ -24,6 +30,8 @@ class ScoreBreakdown:
     cost: float
     availability: float
     total: float
+    comfort: float | None = None
+    behavior: float | None = None
 
 
 def _positive(features: dict[str, float]) -> dict[str, float]:
@@ -113,5 +121,45 @@ def weighted_total(
         cosine=cosine,
         cost=cost_score,
         availability=availability_score,
+        total=total,
+    )
+
+
+def behavior_score_from_adjustment(adjustment: float) -> float:
+    """Map a bounded ``[-1, 1]`` behavior adjustment into ``[0, 1]``."""
+    score = 0.5 + adjustment / 2.0
+    if score < 0.0:
+        return 0.0
+    if score > 1.0:
+        return 1.0
+    return score
+
+
+def weighted_total_v2(
+    *,
+    cosine: float,
+    cost_score: float,
+    availability_score: float,
+    comfort_score: float,
+    behavior_score: float,
+) -> ScoreBreakdown:
+    """Combine v2 activity-fit, practicality, comfort, and behavior signals."""
+    total = (
+        _W_V2_COSINE * cosine
+        + _W_V2_AVAILABILITY * availability_score
+        + _W_V2_COST * cost_score
+        + _W_V2_COMFORT * comfort_score
+        + _W_V2_BEHAVIOR * behavior_score
+    )
+    if total < 0.0:
+        total = 0.0
+    if total > 1.0:
+        total = 1.0
+    return ScoreBreakdown(
+        cosine=cosine,
+        cost=cost_score,
+        availability=availability_score,
+        comfort=comfort_score,
+        behavior=behavior_score,
         total=total,
     )

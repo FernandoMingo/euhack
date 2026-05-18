@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from sqlite3 import Row
+
 from app.dataclasses import (
     Activity,
     AttendanceEvent,
@@ -174,6 +176,12 @@ class ActivityRepository(RepositoryBase):
             updated_at=parse_dt(row["updated_at"]),  # type: ignore[arg-type]
         )
 
+    def update_circle_status(self, *, circle_id: str, status: str) -> None:
+        self.execute(
+            "UPDATE circles SET status = ?, updated_at = ? WHERE id = ?",
+            (status, utc_now_iso(), circle_id),
+        )
+
     def list_circle_members(self, *, circle_id: str) -> list[CircleMember]:
         rows = self.fetchall(
             """
@@ -340,4 +348,78 @@ class ActivityRepository(RepositoryBase):
             notes=row["notes"],  # type: ignore[index]
             created_at=parse_dt(row["created_at"]),  # type: ignore[index,arg-type]
         )
+
+    def list_behavioral_signal_rows(self, *, resident_id: str) -> list[Row]:
+        """Return safe resident activity-history rows for behavior-aware matching.
+
+        The rows intentionally contain product interaction data only: invitation
+        status, attendance status, feedback booleans and safety flags. They do
+        not include clinical notes or peer ratings.
+        """
+        rows = self.fetchall(
+            """
+            SELECT
+                a.id AS activity_id,
+                a.activity_type AS template_code,
+                a.start_at AS activity_start_at,
+                t.id AS template_id,
+                t.family AS family,
+                i.status AS invitation_status,
+                i.sent_at AS invitation_sent_at,
+                i.responded_at AS invitation_responded_at,
+                ae.attendance_status AS attendance_status,
+                ae.check_in_at AS check_in_at,
+                ae.check_out_at AS check_out_at,
+                rf.felt_after AS felt_after,
+                rf.activity_fit AS activity_fit,
+                rf.group_comfort AS group_comfort,
+                rf.would_repeat AS would_repeat,
+                rf.safety_reported AS feedback_safety_reported,
+                rf.created_at AS feedback_created_at,
+                sr.escalation_level AS safety_escalation_level,
+                sr.created_at AS safety_created_at
+            FROM activities a
+            LEFT JOIN activity_templates t ON t.code = a.activity_type
+            LEFT JOIN invitations i
+                ON i.activity_id = a.id AND i.resident_id = ?
+            LEFT JOIN attendance_events ae
+                ON ae.activity_id = a.id AND ae.resident_id = ?
+            LEFT JOIN resident_feedback rf
+                ON rf.activity_id = a.id AND rf.resident_id = ?
+            LEFT JOIN safety_reports sr
+                ON sr.activity_id = a.id AND sr.reporter_resident_id = ?
+            WHERE i.id IS NOT NULL
+               OR ae.id IS NOT NULL
+               OR rf.id IS NOT NULL
+               OR sr.id IS NOT NULL
+            ORDER BY COALESCE(
+                rf.created_at,
+                sr.created_at,
+                ae.check_out_at,
+                ae.check_in_at,
+                i.responded_at,
+                i.sent_at,
+                a.start_at
+            ) DESC, a.id
+            """,
+            (resident_id, resident_id, resident_id, resident_id),
+        )
+        return rows
+
+    def count_recent_successful_matches(self, *, resident_id: str) -> int:
+        """Count accepted/attended recent successes for bounded fairness priority."""
+        row = self.fetchone(
+            """
+            SELECT COUNT(DISTINCT a.id) AS count
+            FROM activities a
+            LEFT JOIN invitations i
+                ON i.activity_id = a.id AND i.resident_id = ?
+            LEFT JOIN attendance_events ae
+                ON ae.activity_id = a.id AND ae.resident_id = ?
+            WHERE i.status = 'accepted'
+               OR ae.attendance_status = 'attended'
+            """,
+            (resident_id, resident_id),
+        )
+        return int(row["count"] if row is not None else 0)
 

@@ -1,6 +1,7 @@
 from .db import connect, init_db
 from .logging_config import configure_logging
 from .matching import (
+    BEHAVIORAL_MODEL_VERSION,
     DEFAULT_MODEL_VERSION,
     CircleEngine,
     GroupingResult,
@@ -8,6 +9,7 @@ from .matching import (
     MatchResult,
     ProposedGroup,
     RejectedResident,
+    UnmatchedResident,
 )
 from .repositories import (
     ActivityRepository,
@@ -19,6 +21,7 @@ from .repositories import (
     ReferralRepository,
     ResidentRepository,
 )
+from .services import MatchingWorkflowService, ReferralMatchingWorkflowResult
 
 __all__ = [
     "connect",
@@ -32,11 +35,15 @@ __all__ = [
     "RatingRepository",
     "ReferralRepository",
     "ResidentRepository",
+    "MatchingWorkflowService",
+    "ReferralMatchingWorkflowResult",
     "CircleEngine",
     "GroupingResult",
     "MatchingEngine",
     "MatchResult",
     "ProposedGroup",
     "RejectedResident",
+    "UnmatchedResident",
     "DEFAULT_MODEL_VERSION",
+    "BEHAVIORAL_MODEL_VERSION",
 ]

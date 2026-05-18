@@ -7,6 +7,11 @@ operators can audit any recommendation.
 """
 
 from app.matching.constraints import ConstraintResult, check_template_constraints
+from app.matching.behavioral import (
+    BEHAVIORAL_MODEL_VERSION,
+    BehavioralProfile,
+    build_behavioral_profile,
+)
 from app.matching.engine import MatchingEngine, MatchResult
 from app.matching.explain import Explanation, build_explanation
 from app.matching.grouping import (
@@ -15,6 +20,7 @@ from app.matching.grouping import (
     GroupingResult,
     ProposedGroup,
     RejectedResident,
+    UnmatchedResident,
     availability_density,
     compute_group_fit,
     group_size_comfort,
@@ -26,10 +32,12 @@ from app.matching.grouping import (
 from app.matching.scoring import (
     ScoreBreakdown,
     availability_overlap_score,
+    behavior_score_from_adjustment,
     cosine_similarity,
     cost_compatibility_score,
     feature_contributions,
     weighted_total,
+    weighted_total_v2,
 )
 from app.matching.vectorizer import (
     DEFAULT_MODEL_VERSION,
@@ -46,6 +54,8 @@ from app.matching.vectorizer import (
 
 __all__ = [
     "AVOIDANCE_WEIGHT",
+    "BEHAVIORAL_MODEL_VERSION",
+    "BehavioralProfile",
     "CircleEngine",
     "ConstraintResult",
     "DEFAULT_MODEL_VERSION",
@@ -58,6 +68,9 @@ __all__ = [
     "ProposedGroup",
     "RejectedResident",
     "ScoreBreakdown",
+    "UnmatchedResident",
+    "behavior_score_from_adjustment",
+    "build_behavioral_profile",
     "allowed_cost_bands",
     "availability_buckets_for_window",
     "availability_density",
@@ -79,4 +92,5 @@ __all__ = [
     "social_energy_consistency",
     "social_energy_from_comfort",
     "weighted_total",
+    "weighted_total_v2",
 ]

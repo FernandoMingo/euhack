@@ -117,6 +117,8 @@ class _ResidentProfile:
     interest_keys: frozenset[str]
     social_energy: str  # "low" | "medium" | "high"
     constraint: ConstraintResult
+    fairness_priority: float = 0.0
+    recent_success_count: int = 0
 
 
 @dataclass(slots=True, frozen=True)
@@ -157,6 +159,16 @@ class RejectedResident:
 
 
 @dataclass(slots=True, frozen=True)
+class UnmatchedResident:
+    """An eligible resident that was not placed in a proposed circle."""
+
+    resident: Resident
+    reason: str
+    summary_text: str
+    payload: dict[str, object]
+
+
+@dataclass(slots=True, frozen=True)
 class GroupingResult:
     """Public return value of :meth:`CircleEngine.run_grouping`."""
 
@@ -165,6 +177,7 @@ class GroupingResult:
     activity: Activity | None
     groups: tuple[ProposedGroup, ...]
     rejected: tuple[RejectedResident, ...]
+    unmatched: tuple[UnmatchedResident, ...] = tuple()
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +337,7 @@ class CircleEngine:
         activities: ActivityRepository,
         model_version: str = DEFAULT_MODEL_VERSION,
         score_algorithm: str = _SCORE_ALGORITHM,
+        fair_grouping: bool = False,
     ) -> None:
         self.residents = residents
         self.templates = templates
@@ -331,6 +345,7 @@ class CircleEngine:
         self.activities = activities
         self.model_version = model_version
         self.score_algorithm = score_algorithm
+        self.fair_grouping = fair_grouping
 
     def run_grouping(
         self,
@@ -382,9 +397,18 @@ class CircleEngine:
             else:
                 rejected_profiles.append(profile)
 
-        eligible.sort(
-            key=lambda p: (-p.template_score.total, p.resident.id)
-        )
+        if self.fair_grouping:
+            eligible.sort(
+                key=lambda p: (
+                    -p.fairness_priority,
+                    -p.template_score.total,
+                    p.resident.id,
+                )
+            )
+        else:
+            eligible.sort(
+                key=lambda p: (-p.template_score.total, p.resident.id)
+            )
 
         proposed = self._form_groups(
             eligible_profiles=eligible,
@@ -399,18 +423,30 @@ class CircleEngine:
                 tuple(p.resident.id for p in item[1]),
             ),
         )[:top_n]
+        grouped_ids = {
+            profile.resident.id
+            for _, profiles, _, _, _ in proposed
+            for profile in profiles
+        }
+        ungrouped_profiles = (
+            [profile for profile in eligible if profile.resident.id not in grouped_ids]
+            if self.fair_grouping
+            else []
+        )
 
         run_id = ""
         accepted_groups: list[ProposedGroup] = []
         rejected_residents: list[RejectedResident] = []
+        unmatched_residents: list[UnmatchedResident] = []
         if persist:
-            run_id, accepted_groups, rejected_residents = self._persist_run(
+            run_id, accepted_groups, rejected_residents, unmatched_residents = self._persist_run(
                 template=template,
                 activity=activity,
                 template_vector=template_vector,
                 ranked_groups=ranked_groups,
                 rejected_profiles=rejected_profiles,
                 eligible_profiles=eligible,
+                ungrouped_profiles=ungrouped_profiles,
             )
         else:
             for rank, (fit_score, profiles, components, shared_avail, shared_int) in enumerate(
@@ -441,6 +477,19 @@ class CircleEngine:
                         template=template,
                     )
                 )
+            for offset, profile in enumerate(
+                sorted(ungrouped_profiles, key=lambda p: p.resident.id),
+                start=len(accepted_groups) + len(rejected_residents) + 1,
+            ):
+                unmatched_residents.append(
+                    _build_unmatched_resident(
+                        rank=offset,
+                        profile=profile,
+                        model_version=self.model_version,
+                        template=template,
+                        reason="eligible_not_grouped",
+                    )
+                )
 
         logger.info(
             "circle_matching.run end run=%s template=%s groups=%d rejected=%d eligible=%d",
@@ -457,6 +506,7 @@ class CircleEngine:
             activity=activity,
             groups=tuple(accepted_groups),
             rejected=tuple(rejected_residents),
+            unmatched=tuple(unmatched_residents),
         )
 
     # ------------------------------------------------------------------
@@ -586,7 +636,21 @@ class CircleEngine:
             interest_keys=frozenset(interest_keys),
             social_energy=social_energy_from_comfort(resident.social_comfort),
             constraint=constraint,
+            fairness_priority=self._fairness_priority(resident.id),
+            recent_success_count=self.activities.count_recent_successful_matches(
+                resident_id=resident.id
+            )
+            if self.fair_grouping
+            else 0,
         )
+
+    def _fairness_priority(self, resident_id: str) -> float:
+        if not self.fair_grouping:
+            return 0.0
+        successes = self.activities.count_recent_successful_matches(
+            resident_id=resident_id
+        )
+        return 1.0 / (1.0 + successes)
 
     def _form_groups(
         self,
@@ -656,6 +720,11 @@ class CircleEngine:
             fit_score, components, shared_avail, shared_interests = compute_group_fit(
                 current_group
             )
+            if self.fair_grouping:
+                member_scores = [p.template_score.total for p in current_group]
+                min_fit = min(member_scores)
+                spread = max(member_scores) - min_fit
+                fit_score = max(0.0, min(1.0, fit_score * 0.75 + min_fit * 0.25 - spread * 0.10))
             groups.append(
                 (fit_score, current_group, components, shared_avail, shared_interests)
             )
@@ -672,7 +741,13 @@ class CircleEngine:
         ],
         rejected_profiles: list[_ResidentProfile],
         eligible_profiles: list[_ResidentProfile],
-    ) -> tuple[str, list[ProposedGroup], list[RejectedResident]]:
+        ungrouped_profiles: list[_ResidentProfile],
+    ) -> tuple[
+        str,
+        list[ProposedGroup],
+        list[RejectedResident],
+        list[UnmatchedResident],
+    ]:
         run = self.matching.create_matching_run(
             run_type="circle_matching",
             model_version=self.model_version,
@@ -790,8 +865,33 @@ class CircleEngine:
             rejected.append(rejected_resident)
             rank_cursor += 1
 
+        unmatched: list[UnmatchedResident] = []
+        for profile in sorted(ungrouped_profiles, key=lambda p: p.resident.id):
+            unmatched_resident = _build_unmatched_resident(
+                rank=rank_cursor,
+                profile=profile,
+                model_version=self.model_version,
+                template=template,
+                reason="eligible_not_grouped",
+            )
+            candidate = self.matching.add_match_candidate(
+                matching_run_id=run.id,
+                resident_id=profile.resident.id,
+                activity_id=activity.id if activity is not None else template.id,
+                total_score=profile.template_score.total,
+                rank_position=rank_cursor,
+                hard_constraints_passed=True,
+            )
+            self.matching.add_explanation(
+                match_candidate_id=candidate.id,
+                summary_text=unmatched_resident.summary_text,
+                explanation_json=json.dumps(unmatched_resident.payload, sort_keys=True),
+            )
+            unmatched.append(unmatched_resident)
+            rank_cursor += 1
+
         self.matching.conn.commit()
-        return run.id, accepted, rejected
+        return run.id, accepted, rejected, unmatched
 
 
 # ---------------------------------------------------------------------------
@@ -905,6 +1005,38 @@ def _build_rejected_resident(
     )
 
 
+def _build_unmatched_resident(
+    *,
+    rank: int,
+    profile: _ResidentProfile,
+    model_version: str,
+    template: ActivityTemplate,
+    reason: str,
+) -> UnmatchedResident:
+    summary = (
+        f"#{rank} {profile.resident.first_name}: eligible for {template.title} "
+        f"but not placed ({reason})."
+    )
+    payload: dict[str, object] = {
+        "model_version": model_version,
+        "template_code": template.code,
+        "template_id": template.id,
+        "rank_position": rank,
+        "resident_id": profile.resident.id,
+        "constraints": {"passed": True, "reasons": []},
+        "unmatched_reason": reason,
+        "template_score": round(profile.template_score.total, 6),
+        "fairness_priority": round(profile.fairness_priority, 6),
+        "recent_success_count": profile.recent_success_count,
+    }
+    return UnmatchedResident(
+        resident=profile.resident,
+        reason=reason,
+        summary_text=summary,
+        payload=payload,
+    )
+
+
 def _group_feature_scores(
     components: GroupComponents,
     profiles: list[_ResidentProfile],
@@ -974,6 +1106,7 @@ __all__ = [
     "GroupingResult",
     "ProposedGroup",
     "RejectedResident",
+    "UnmatchedResident",
     "availability_density",
     "compute_group_fit",
     "group_size_comfort",

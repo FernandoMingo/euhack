@@ -506,6 +506,54 @@ class TestCircleEngine(unittest.TestCase):
                 self.assertIn("circle_matching.run start", logs)
                 self.assertIn("circle_matching.run end", logs)
 
+    def test_fair_grouping_persists_eligible_unmatched_residents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = Path(tmp_dir) / "circle.db"
+            init_db(db_path=db_path)
+            with connect(db_path=db_path) as conn:
+                residents_repo = ResidentRepository(conn)
+                templates_repo = ActivityTemplateRepository(conn)
+                matching_repo = MatchingRepository(conn)
+                activities_repo = ActivityRepository(conn)
+                seed_activity_templates(conn=conn)
+                _seed_residents(residents_repo, PHOTOGRAPHY_PROFILES)
+
+                engine = CircleEngine(
+                    residents=residents_repo,
+                    templates=templates_repo,
+                    matching=matching_repo,
+                    activities=activities_repo,
+                    score_algorithm="circle_fair_v2",
+                    fair_grouping=True,
+                )
+                result = engine.run_grouping(
+                    template_code="photography_walk",
+                    top_n=1,
+                    min_group_size=3,
+                    max_group_size=4,
+                )
+
+                self.assertGreaterEqual(len(result.groups), 1)
+                self.assertGreaterEqual(len(result.unmatched), 1)
+                self.assertTrue(
+                    all(item.reason == "eligible_not_grouped" for item in result.unmatched)
+                )
+                unmatched_rows = conn.execute(
+                    """
+                    SELECT e.explanation_json
+                    FROM match_explanations e
+                    JOIN match_candidates c ON c.id = e.match_candidate_id
+                    WHERE c.matching_run_id = ?
+                      AND c.resident_id IS NOT NULL
+                      AND c.hard_constraints_passed = 1
+                    """,
+                    (result.matching_run_id,),
+                ).fetchall()
+                payloads = [json.loads(row["explanation_json"]) for row in unmatched_rows]
+                self.assertTrue(
+                    any(p.get("unmatched_reason") == "eligible_not_grouped" for p in payloads)
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -71,12 +71,10 @@ Feature-by-feature, with file references and commits.
 | Deterministic people/group matching v1 (circle engine) | `backend/sql/004_circle_template_refs.sql`, `backend/app/matching/grouping.py`, `backend/app/repositories/activity_repository.py`, `backend/app/dataclasses.py`, `backend/tests/test_circle_engine.py` | `f314946` |
 | GP onboarding service + stub verification | `backend/sql/003_onboarding_fields.sql`, `backend/app/services/*.py`, `backend/app/repositories/professional_repository.py`, `backend/app/repositories/consent_repository.py`, `backend/app/repositories/referral_repository.py`, `backend/tests/test_onboarding_service.py` | `0892299` / `842b397` merge |
 | FastAPI HTTP API across core repositories | `backend/app/api/**/*.py`, `backend/requirements.txt`, `backend/tests/test_api_*.py`, `backend/tests/test_onboarding_api.py` | `2b6659a` / `842b397` merge |
+| Behavioral matching v2 + fair grouping workflow slice | `backend/app/matching/behavioral.py`, `backend/app/matching/vectorizer.py`, `backend/app/matching/scoring.py`, `backend/app/matching/engine.py`, `backend/app/matching/grouping.py`, `backend/app/services/matching_service.py`, `backend/tests/test_matching_service.py` | pending |
 
 ### Not built yet
-- Behavioral signals (recent attendance / feedback decay) in the resident vectorizer
-- End-to-end matching orchestration service composing repositories + `MatchingEngine` + `CircleEngine` for referral acceptance → activity ranking → circle matching → operator review
-- Automatic promotion of operator-approved proposed circles into invitations (manual invitation endpoints exist)
-- Audit-event rows around every important state transition
+- HTTP/API routes for the matching orchestration service
 - Production Vektis/CIBG/KvK verification integrations; current verification is a deterministic stub
 - Frontend
 
@@ -247,25 +245,26 @@ Each template carries structured attributes used for vectorization:
 
 **Feature 8: Behavioral signals + matching orchestration service layer.**
 
-The deterministic activity-ranking engine (feature 5) and the
-deterministic circle/group matching engine (feature 6) are now both
-built (see section 5). The repository also has a FastAPI API layer and
-an onboarding service for professional signup + resident referral. The
-next work is to feed behavioral signals into the resident vector and add
-a matching orchestration service for end-to-end operator workflows.
+The deterministic activity-ranking engine (feature 5), deterministic
+circle/group matching engine (feature 6), and the first behavior-aware
+workflow slice (feature 8) are built. The v2 path is opt-in via
+`model_version="v2"` and `fair_grouping=True`, so v1 behavior remains stable.
 
-Scope:
-1. Fold recent attendance and feedback signals into resident feature weights
-   with exponential decay (e.g. `0.95^weeks`).
-2. Add a matching service layer that composes repositories + `MatchingEngine` +
-   `CircleEngine` for referral acceptance → activity ranking → circle
-   matching → operator review.
-3. Promote operator-approved proposed circles into invitations.
-4. Wire `audit_events` rows around every state transition (referral
-   acceptance, activity-ranking run, circle-matching run, operator
-   decision, invitation send).
-5. Keep the API thin: routes should validate/serialize and delegate business
-   workflows to repositories or service classes.
+Implemented:
+1. Safe behavioral signals from invitations, attendance, resident feedback,
+   and safety flags with exponential decay (`0.95^weeks`) and bounded boosts.
+2. V2 activity ranking components for behavior and comfort alignment.
+3. Fair circle grouping with priority for less-served residents, score-spread
+   penalty, and persisted eligible-but-unmatched explanations.
+4. `MatchingWorkflowService` for referral acceptance → v2 ranking → fair circle
+   matching, operator decision audit rows, and approved-circle invitation sends.
+5. Tests for behavioral scoring artifacts, fair grouping unmatched residents,
+   and audit rows around invitation promotion.
+
+Remaining:
+1. Expose thin HTTP/API routes for the matching workflow service.
+2. Expand operator-dashboard views for proposed circles, unmatched residents,
+   and audit explanations.
 
 Group-fit weights in use (feature 6, sum to 1.0):
 - `template_fit`: 0.50
@@ -296,9 +295,11 @@ Current weight model (v1):
 - strong avoidances: −1.5
 - structure / risk / skill / format features: 0.5
 
-Planned for v2:
-- recent positive behavior: 1.1–1.3
-- exponential decay on old behavior (e.g. `0.95^weeks`)
+V2 behavior model:
+- safe positive behavior is capped and decayed before boosting
+  `activity_pref:<code>` and `family:<value>` features
+- declined/expired invitations, no-shows, negative feedback, and safety flags
+  dampen repeated templates/families without creating public resident scores
 
 ---
 

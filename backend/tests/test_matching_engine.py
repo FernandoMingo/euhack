@@ -10,7 +10,9 @@ from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app import (  # noqa: E402
+    ActivityRepository,
     ActivityTemplateRepository,
+    BEHAVIORAL_MODEL_VERSION,
     MatchingRepository,
     ResidentRepository,
     connect,
@@ -27,6 +29,7 @@ from app.matching import (  # noqa: E402
     AVOIDANCE_WEIGHT,
     DEFAULT_MODEL_VERSION,
     MatchingEngine,
+    build_behavioral_profile,
     build_resident_vector,
     build_template_vector,
     check_template_constraints,
@@ -535,6 +538,92 @@ class TestMatchingEngine(unittest.TestCase):
                     (run_id,),
                 ).fetchall()
                 self.assertGreater(len(rejected_rows), 0)
+
+    def test_v2_matching_persists_behavior_and_comfort_components(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            db_path = Path(tmp_dir) / "test.db"
+            init_db(db_path=db_path)
+            with connect(db_path=db_path) as conn:
+                engine, resident_id = self._setup_engine(conn)
+                activities = ActivityRepository(conn)
+                templates = ActivityTemplateRepository(conn)
+                matching = MatchingRepository(conn)
+                venue = activities.create_venue(
+                    name="Park Gate",
+                    address="Vondelpark",
+                    city="Amsterdam",
+                )
+                activity = activities.create_activity(
+                    title="Previous Photography Walk",
+                    activity_type="photography_walk",
+                    venue_id=venue.id,
+                    start_at="2026-01-01T10:00:00+00:00",
+                    end_at="2026-01-01T11:30:00+00:00",
+                    capacity=6,
+                    risk_level="low",
+                    approval_status="approved",
+                )
+                activities.record_attendance(
+                    activity_id=activity.id,
+                    resident_id=resident_id,
+                    attendance_status="attended",
+                )
+                activities.add_feedback(
+                    activity_id=activity.id,
+                    resident_id=resident_id,
+                    felt_after="better",
+                    activity_fit=True,
+                    group_comfort=True,
+                    would_repeat=True,
+                )
+                conn.commit()
+
+                profile = build_behavioral_profile(
+                    activities.list_behavioral_signal_rows(resident_id=resident_id)
+                )
+                self.assertGreater(
+                    profile.adjustment_for(
+                        template_code="photography_walk",
+                        family="walks_outdoor",
+                    ),
+                    0.0,
+                )
+
+                v2_engine = MatchingEngine(
+                    residents=ResidentRepository(conn),
+                    templates=templates,
+                    matching=matching,
+                    activities=activities,
+                    model_version=BEHAVIORAL_MODEL_VERSION,
+                    score_algorithm="cosine_weighted_v2",
+                )
+                run_id, top_results = v2_engine.run_matching(
+                    resident_id=resident_id,
+                    top_n=5,
+                )
+                self.assertNotEqual(run_id, "")
+                self.assertTrue(
+                    any(
+                        result.template.code == "photography_walk"
+                        and result.breakdown.behavior is not None
+                        and result.breakdown.comfort is not None
+                        for result in top_results
+                    )
+                )
+                feature_keys = {
+                    row["feature_key"]
+                    for row in conn.execute(
+                        """
+                        SELECT fs.feature_key
+                        FROM match_feature_scores fs
+                        JOIN match_candidates c ON c.id = fs.match_candidate_id
+                        WHERE c.matching_run_id = ?
+                        """,
+                        (run_id,),
+                    ).fetchall()
+                }
+                self.assertIn("score:behavior_alignment", feature_keys)
+                self.assertIn("score:comfort_alignment", feature_keys)
 
 
 if __name__ == "__main__":

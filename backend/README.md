@@ -7,6 +7,7 @@ This backend folder contains the first implementation slice for CivicCircles:
 - repository/query layer on top of `sqlite3`
 - activity templates catalog + seed pipeline
 - deterministic vectorizer and matching engine (Feature 5)
+- behavior-aware matching and workflow service (Feature 8 slice)
 
 ## What is implemented
 
@@ -288,6 +289,31 @@ Pipeline (one `CircleEngine.run_grouping` call):
    so operators can audit who was filtered and why. Invitations are
    not sent and peer-rating tables are not read.
 
+## Behavior-aware matching and workflow service (v2)
+
+Feature 8 adds an opt-in v2 path while keeping the v1 engines stable for
+existing callers:
+
+- `app.matching.behavioral` converts safe product interaction data into
+  bounded, decayed signals. It only reads invitations, attendance,
+  resident feedback, and safety flags; it does not read clinical data or raw
+  peer ratings.
+- `MatchingEngine(..., model_version="v2", activities=ActivityRepository(...))`
+  adds behavior and comfort components to the persisted score breakdown.
+  Positive behavior can boost matching on prior templates/families, while
+  negative behavior dampens repeats. The behavior boost is capped so explicit
+  preferences and hard constraints remain primary.
+- `CircleEngine(..., fair_grouping=True, score_algorithm="circle_fair_v2")`
+  seeds groups with a bounded fairness priority for residents with fewer
+  recent successful matches, penalizes groups with large individual-fit spread,
+  and persists eligible-but-unmatched residents with an explanation.
+- `MatchingWorkflowService` composes referral acceptance, v2 activity ranking,
+  fair circle proposals, operator decision audit rows, and invitation
+  promotion for approved activity-backed circles.
+
+The operator-approval rule remains unchanged: proposed circles do not send
+invitations until they are anchored to an approved concrete activity.
+
 ### Running a circle-matching run
 
 ```python
@@ -371,6 +397,8 @@ Current test coverage includes:
   across runs, and persisted rows for `matching_runs`, `circles`,
   `circle_members`, `match_candidates`, `match_feature_scores`, and
   `match_explanations`
+- v2 matching: behavior/comfort score components, fair-grouping unmatched
+  explanations, and approved-circle invitation promotion with audit rows
 
 ## Logging usage
 
@@ -385,9 +413,7 @@ init_db()
 
 ## Next recommended steps
 
-1. Compose a service layer that ties referral acceptance → activity ranking → circle matching → operator review into a single auditable flow.
-2. Add behavioral signals (recent attendance, feedback decay) into the resident vectorizer as documented in AGENTS.md section 10.
-3. Promote operator-approved proposed circles into invitations once the operator approval flow exists.
-4. Expose a thin HTTP/API layer for operator dashboards and trusted-professional consoles.
-5. Add a richer migrations strategy (up/down scripts) for production evolution.
+1. Expose thin HTTP/API routes for the v2 matching workflow service.
+2. Add richer operator review screens for proposed circles, unmatched residents, and audit explanations.
+3. Add a richer migrations strategy (up/down scripts) for production evolution.
 

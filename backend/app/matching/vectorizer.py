@@ -136,6 +136,7 @@ def build_resident_vector(
     preferences: Iterable[ResidentPreference],
     availabilities: Iterable[ResidentAvailability],
     avoidances: Iterable[ResidentAvoidance],
+    behavioral_features: dict[str, float] | None = None,
 ) -> FeatureVector:
     """Build a sparse feature dict for a resident from their structured state."""
     preferences = list(preferences)
@@ -175,6 +176,10 @@ def build_resident_vector(
 
     for band in allowed_cost_bands(resident.cost_sensitivity):
         _set_max(feats, f"cost:{band}", 1.0)
+
+    for key, weight in (behavioral_features or {}).items():
+        if weight > 0.0:
+            feats[key] = feats.get(key, 0.0) + weight
 
     logger.debug(
         "vectorizer.resident resident=%s features=%d prefs=%d avails=%d avoids=%d",
