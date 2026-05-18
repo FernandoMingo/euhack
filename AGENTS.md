@@ -47,9 +47,11 @@ These are hard rules:
 - Python 3.10+
 - SQLite (via `sqlite3` stdlib)
 - Plain dataclasses (no ORM yet)
-- `unittest` for tests
+- FastAPI + Pydantic for the current HTTP API layer
+- Uvicorn for local API serving
+- `unittest` for tests, including FastAPI `TestClient` coverage
 - Standard `logging` for observability
-- No FastAPI/Flask yet — pure data layer + future service layer
+- SQL migrations are plain `.sql` files applied in filename order; no migration framework yet
 
 ---
 
@@ -66,13 +68,16 @@ Feature-by-feature, with file references and commits.
 | Testing + structured logging | `backend/app/logging_config.py`, `backend/tests/*` | `2f78bfa` |
 | Activity templates catalog (131 activities) | `backend/sql/002_activity_templates.sql`, `backend/data/activity_catalog.json`, `backend/app/seed.py`, `backend/app/repositories/activity_template_repository.py`, `backend/scripts/seed_activity_catalog.py`, `backend/tests/test_activity_templates.py` | `7bf6a6a` |
 | Vectorizer + deterministic matching engine v1 | `backend/sql/003_matching_template_refs.sql`, `backend/app/matching/*.py`, `backend/app/repositories/resident_repository.py`, `backend/tests/test_matching_engine.py` | `e3525b8` |
-| Deterministic people/group matching v1 (circle engine) | `backend/sql/004_circle_template_refs.sql`, `backend/app/matching/grouping.py`, `backend/app/repositories/activity_repository.py`, `backend/app/dataclasses.py`, `backend/tests/test_circle_engine.py` | _pending_ |
+| Deterministic people/group matching v1 (circle engine) | `backend/sql/004_circle_template_refs.sql`, `backend/app/matching/grouping.py`, `backend/app/repositories/activity_repository.py`, `backend/app/dataclasses.py`, `backend/tests/test_circle_engine.py` | `f314946` |
+| GP onboarding service + stub verification | `backend/sql/003_onboarding_fields.sql`, `backend/app/services/*.py`, `backend/app/repositories/professional_repository.py`, `backend/app/repositories/consent_repository.py`, `backend/app/repositories/referral_repository.py`, `backend/tests/test_onboarding_service.py` | `0892299` / `842b397` merge |
+| FastAPI HTTP API across core repositories | `backend/app/api/**/*.py`, `backend/requirements.txt`, `backend/tests/test_api_*.py`, `backend/tests/test_onboarding_api.py` | `2b6659a` / `842b397` merge |
 
 ### Not built yet
 - Behavioral signals (recent attendance / feedback decay) in the resident vectorizer
-- Service layer composing repositories + matching engines for end-to-end flows (referral → activity ranking → circle matching → operator review)
-- Promotion of operator-approved proposed circles into invitations
-- HTTP/API layer integrating the circle engine into operator dashboards
+- End-to-end matching orchestration service composing repositories + `MatchingEngine` + `CircleEngine` for referral acceptance → activity ranking → circle matching → operator review
+- Automatic promotion of operator-approved proposed circles into invitations (manual invitation endpoints exist)
+- Audit-event rows around every important state transition
+- Production Vektis/CIBG/KvK verification integrations; current verification is a deterministic stub
 - Frontend
 
 ---
@@ -93,6 +98,15 @@ euhack/
 │   │   ├── dataclasses.py             (all domain + model dataclasses)
 │   │   ├── logging_config.py
 │   │   ├── seed.py                    (catalog loader + seeder)
+│   │   ├── api/
+│   │   │   ├── main.py                (FastAPI app factory)
+│   │   │   ├── __main__.py            (CLI: python -m app.api)
+│   │   │   ├── schemas.py             (Pydantic request/response models)
+│   │   │   ├── converters.py          (dataclass → API response mapping)
+│   │   │   ├── deps.py                (per-request DB connection dependency)
+│   │   │   └── routers/               (health, professionals, referrals, residents,
+│   │   │                                templates, activities, invitations, consents,
+│   │   │                                operator)
 │   │   ├── matching/
 │   │   │   ├── __init__.py            (public matching API)
 │   │   │   ├── vectorizer.py          (resident + template feature vectors)
@@ -101,11 +115,17 @@ euhack/
 │   │   │   ├── explain.py             (summary + structured rationale)
 │   │   │   ├── engine.py              (activity-ranking orchestrator)
 │   │   │   └── grouping.py            (deterministic circle/group matching v1)
+│   │   ├── services/
+│   │   │   ├── onboarding_service.py  (professional signup + resident referral flow)
+│   │   │   └── verification_service.py (stub AGB/BIG/KvK verification)
 │   │   └── repositories/
 │   │       ├── base.py
 │   │       ├── resident_repository.py
 │   │       ├── activity_repository.py
 │   │       ├── activity_template_repository.py
+│   │       ├── professional_repository.py
+│   │       ├── consent_repository.py
+│   │       ├── referral_repository.py
 │   │       ├── matching_repository.py
 │   │       └── rating_repository.py
 │   ├── data/
@@ -115,6 +135,7 @@ euhack/
 │   ├── sql/
 │   │   ├── 001_initial_schema.sql
 │   │   ├── 002_activity_templates.sql
+│   │   ├── 003_onboarding_fields.sql
 │   │   ├── 003_matching_template_refs.sql
 │   │   └── 004_circle_template_refs.sql
 │   └── tests/
@@ -123,7 +144,14 @@ euhack/
 │       ├── test_logging.py
 │       ├── test_activity_templates.py
 │       ├── test_matching_engine.py
-│       └── test_circle_engine.py
+│       ├── test_circle_engine.py
+│       ├── test_onboarding_service.py
+│       ├── test_onboarding_api.py
+│       ├── test_api_templates.py
+│       ├── test_api_residents.py
+│       ├── test_api_activities.py
+│       ├── test_api_invitations_consents.py
+│       └── test_api_operator.py
 ```
 
 ---
@@ -135,6 +163,7 @@ Key entities and what they exist for:
 - **People**: `residents`, `trusted_professionals`, `hosts`
 - **Profile signals**: `resident_preferences`, `resident_availability`, `resident_avoidances`
 - **Consent and referrals**: `consent_records`, `consent_scopes`, `referrals`
+- **Professional verification**: `professional_verifications` plus AGB/BIG/KvK fields on `trusted_professionals`
 - **Activities (real instances)**: `activities`, `venues`, `activity_accessibility`
 - **Activity catalog (templates)**: `activity_templates`, `activity_template_tags`
 - **Group formation**: `circles`, `circle_members`
@@ -154,6 +183,11 @@ The schema enforces foreign keys, has check constraints on enum values, and uses
 
 From repo root.
 
+Install backend dependencies:
+```bash
+python3 -m pip install -r backend/requirements.txt
+```
+
 Initialize / re-init the database:
 ```bash
 python3 backend/init_db.py
@@ -167,6 +201,11 @@ python3 backend/scripts/seed_activity_catalog.py
 Run all tests:
 ```bash
 PYTHONPATH="$(pwd)/backend" python3 -m unittest discover -s backend/tests -p "test_*.py"
+```
+
+Run the FastAPI app locally:
+```bash
+PYTHONPATH="$(pwd)/backend" python3 -m app.api --host 127.0.0.1 --port 8000
 ```
 
 Enable verbose logging in code:
@@ -206,24 +245,27 @@ Each template carries structured attributes used for vectorization:
 
 ## 10. Next feature to build
 
-**Feature 7: Behavioral signals + end-to-end service layer.**
+**Feature 8: Behavioral signals + matching orchestration service layer.**
 
 The deterministic activity-ranking engine (feature 5) and the
 deterministic circle/group matching engine (feature 6) are now both
-built (see section 5). The next work is to feed behavioral signals into
-the resident vector and to wrap both engines in a service layer for
-end-to-end flows.
+built (see section 5). The repository also has a FastAPI API layer and
+an onboarding service for professional signup + resident referral. The
+next work is to feed behavioral signals into the resident vector and add
+a matching orchestration service for end-to-end operator workflows.
 
 Scope:
 1. Fold recent attendance and feedback signals into resident feature weights
    with exponential decay (e.g. `0.95^weeks`).
-2. Add a service layer that composes repositories + `MatchingEngine` +
+2. Add a matching service layer that composes repositories + `MatchingEngine` +
    `CircleEngine` for referral acceptance → activity ranking → circle
    matching → operator review.
 3. Promote operator-approved proposed circles into invitations.
 4. Wire `audit_events` rows around every state transition (referral
    acceptance, activity-ranking run, circle-matching run, operator
    decision, invitation send).
+5. Keep the API thin: routes should validate/serialize and delegate business
+   workflows to repositories or service classes.
 
 Group-fit weights in use (feature 6, sum to 1.0):
 - `template_fit`: 0.50
@@ -264,6 +306,12 @@ Planned for v2:
 
 Current branch `fer/features` history:
 ```
+f314946 feat: add deterministic circle/group matching engine v1
+25238a4 chore: remove throwaway matching inspector UI
+842b397 Merge jose GP onboarding API into feature branch
+ac3a361 docs: record matching inspector commit hash
+abe8a25 chore: add throwaway matching inspector UI
+2b6659a feat: expand API to full coverage across all repositories
 592205f chore: expand matching engine test + logging coverage
 cb7c2e2 docs: record feature 5 commit hash in AGENTS.md
 e3525b8 feat: add vectorizer and deterministic matching engine v1
@@ -289,9 +337,10 @@ Rules:
 - Do not introduce ORMs or migration frameworks without an explicit decision.
 - Do not store clinical data, even for testing.
 - Do not expose peer ratings to users or in any public API.
-- Do not commit `backend/civiccircles.db` or `__pycache__`.
+- Do not commit `backend/civiccircles.db`, `.venv-libs/`, or `__pycache__`.
 - Do not combine multiple features in a single commit.
 - Do not add silent fallbacks that mask matching errors; matching must be auditable.
+- Do not replace the verification stub with live register calls without an explicit integration decision.
 
 ---
 
