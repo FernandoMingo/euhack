@@ -66,6 +66,7 @@ Feature-by-feature, with file references and commits.
 | Testing + structured logging | `backend/app/logging_config.py`, `backend/tests/*` | `2f78bfa` |
 | Activity templates catalog (131 activities) | `backend/sql/002_activity_templates.sql`, `backend/data/activity_catalog.json`, `backend/app/seed.py`, `backend/app/repositories/activity_template_repository.py`, `backend/scripts/seed_activity_catalog.py`, `backend/tests/test_activity_templates.py` | `7bf6a6a` |
 | Vectorizer + deterministic matching engine v1 | `backend/sql/003_matching_template_refs.sql`, `backend/app/matching/*.py`, `backend/app/repositories/resident_repository.py`, `backend/tests/test_matching_engine.py` | `e3525b8` |
+| Throwaway matching inspector UI | `backend/scripts/serve_matching_ui.py` | _(this commit)_ |
 
 ### Not built yet
 - Behavioral signals (recent attendance / feedback decay) in the resident vectorizer
@@ -108,7 +109,8 @@ euhack/
 │   ├── data/
 │   │   └── activity_catalog.json      (131 activity templates)
 │   ├── scripts/
-│   │   └── seed_activity_catalog.py   (CLI seeder)
+│   │   ├── seed_activity_catalog.py   (CLI seeder)
+│   │   └── serve_matching_ui.py       (throwaway localhost matching inspector)
 │   ├── sql/
 │   │   ├── 001_initial_schema.sql
 │   │   ├── 002_activity_templates.sql
@@ -158,6 +160,16 @@ Seed the activity templates catalog:
 ```bash
 python3 backend/scripts/seed_activity_catalog.py
 ```
+
+Run the throwaway matching inspector UI:
+```bash
+python3 backend/scripts/serve_matching_ui.py
+# then open http://127.0.0.1:8765/
+```
+
+The inspector uses only the Python stdlib. It creates a temporary SQLite DB,
+applies all migrations, seeds the 131 activity templates, and deletes the temp
+DB on shutdown. It is for local inspection only and is not production UI.
 
 Run all tests:
 ```bash
@@ -247,6 +259,8 @@ Planned for v2:
 
 Current branch `fer/features` history:
 ```
+592205f chore: expand matching engine test + logging coverage
+cb7c2e2 docs: record feature 5 commit hash in AGENTS.md
 e3525b8 feat: add vectorizer and deterministic matching engine v1
 7bf6a6a feat: add activity templates catalog with 131 seedable activities
 2f78bfa feat: add backend testing and structured logging support
