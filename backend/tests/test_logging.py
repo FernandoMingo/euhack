@@ -12,7 +12,7 @@ from app import ActivityRepository, configure_logging, connect, init_db  # noqa:
 
 class TestLogging(unittest.TestCase):
     def test_db_initialization_logs_info(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             configure_logging("INFO")
             with self.assertLogs("app.db", level="INFO") as captured:
@@ -22,7 +22,7 @@ class TestLogging(unittest.TestCase):
             self.assertIn("Database initialization completed", logs)
 
     def test_repository_logs_debug_queries(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             init_db(db_path=db_path)
             configure_logging("DEBUG")
