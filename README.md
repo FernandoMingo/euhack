@@ -1,24 +1,25 @@
 # CivicCircles Prototype
 
-First working CivicCircles demo: calm resident map, GP-created lightweight profile, deterministic activity matching, Circle Reveal after check-in, reflection storage, professional dashboard, and operator approval dashboard.
+CivicCircles is an AI-powered social prescribing platform that helps cities reduce loneliness through small, low-pressure, offline activities.
+
+This repository now contains the current SQLite/FastAPI backend implementation and the frontend demo surface from `origin/main`.
 
 ## Scope
 
 - No real authentication.
 - No real email, payments, clinical records, or production AI.
 - No chat, inbox, feed, public attendee browsing, or people marketplace.
-- Matching ranks activity fit only. It does not rank people by social value.
+- Matching must remain explainable and must not rank people by social value.
 
 ## Structure
 
 ```text
 backend/
-  app/main.py
+  app/api/main.py
   app/db.py
-  app/models.py
   app/seed.py
-  app/matching.py
-  app/routes/
+  app/matching/
+  app/repositories/
 frontend/
   app/
   components/
@@ -28,13 +29,10 @@ frontend/
 ## Backend Setup
 
 ```bash
-cd backend
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-cp .env.example .env
-python -m app.seed --reset
-uvicorn app.main:app --reload
+python3 -m pip install -r backend/requirements.txt
+python3 backend/init_db.py
+python3 backend/scripts/seed_activity_catalog.py
+PYTHONPATH="$(pwd)/backend" python3 -m app.api --host 127.0.0.1 --port 8000
 ```
 
 Backend runs at `http://127.0.0.1:8000`. If that port is occupied, use another port and set `NEXT_PUBLIC_API_BASE_URL` in `frontend/.env.local`.
@@ -79,9 +77,11 @@ Resident and operator surfaces are intentionally separate:
 ## API Smoke Checks
 
 ```bash
-curl http://127.0.0.1:8000/api/resident/me
-curl http://127.0.0.1:8000/api/resident/invitations
-curl -X POST http://127.0.0.1:8000/api/ai/rank-activities \
-  -H "Content-Type: application/json" \
-  -d '{"circle_id":"circle_photo_walk"}'
+curl http://127.0.0.1:8000/health
+curl http://127.0.0.1:8000/templates
 ```
+
+## Documentation
+
+- Backend data layer docs: `backend/README.md`
+- Product specification: `civiccircles_project_spec.md`
