@@ -214,6 +214,7 @@ def circle_to_response(c: Circle) -> schemas.CircleResponse:
     return schemas.CircleResponse(
         id=c.id,
         activity_id=c.activity_id,
+        template_id=c.template_id,
         status=c.status,
         fit_score=c.fit_score,
         shared_signals_json=c.shared_signals_json,

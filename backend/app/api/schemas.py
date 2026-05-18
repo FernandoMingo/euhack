@@ -324,7 +324,8 @@ class CircleCreateRequest(BaseModel):
 
 class CircleResponse(BaseModel):
     id: str
-    activity_id: str
+    activity_id: str | None = None
+    template_id: str | None = None
     status: CircleStatusLiteral
     fit_score: float | None
     shared_signals_json: str

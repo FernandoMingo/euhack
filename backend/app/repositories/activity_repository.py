@@ -115,25 +115,84 @@ class ActivityRepository(RepositoryBase):
             updated_at=parse_dt(row["updated_at"]),  # type: ignore[arg-type]
         )
 
-    def create_circle(self, *, activity_id: str, status: str = "proposed", fit_score: float | None = None, shared_signals_json: str = "[]") -> Circle:
+    def create_circle(
+        self,
+        *,
+        activity_id: str | None = None,
+        template_id: str | None = None,
+        status: str = "proposed",
+        fit_score: float | None = None,
+        shared_signals_json: str = "[]",
+    ) -> Circle:
+        if activity_id is None and template_id is None:
+            raise ValueError(
+                "create_circle requires either activity_id or template_id"
+            )
         circle_id = new_id("circle")
         now = utc_now_iso()
         self.execute(
             """
-            INSERT INTO circles (id, activity_id, status, fit_score, shared_signals_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO circles (
+                id, activity_id, template_id, status, fit_score,
+                shared_signals_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (circle_id, activity_id, status, fit_score, shared_signals_json, now, now),
+            (
+                circle_id,
+                activity_id,
+                template_id,
+                status,
+                fit_score,
+                shared_signals_json,
+                now,
+                now,
+            ),
         )
         return Circle(
             id=circle_id,
             activity_id=activity_id,
+            template_id=template_id,
             status=status,  # type: ignore[arg-type]
             fit_score=fit_score,
             shared_signals_json=shared_signals_json,
             created_at=parse_dt(now),  # type: ignore[arg-type]
             updated_at=parse_dt(now),  # type: ignore[arg-type]
         )
+
+    def get_circle(self, circle_id: str) -> Circle | None:
+        row = self.fetchone("SELECT * FROM circles WHERE id = ?", (circle_id,))
+        if row is None:
+            return None
+        return Circle(
+            id=row["id"],
+            activity_id=row["activity_id"],
+            template_id=row["template_id"],
+            status=row["status"],  # type: ignore[arg-type]
+            fit_score=row["fit_score"],
+            shared_signals_json=row["shared_signals_json"],
+            created_at=parse_dt(row["created_at"]),  # type: ignore[arg-type]
+            updated_at=parse_dt(row["updated_at"]),  # type: ignore[arg-type]
+        )
+
+    def list_circle_members(self, *, circle_id: str) -> list[CircleMember]:
+        rows = self.fetchall(
+            """
+            SELECT id, circle_id, resident_id, joined_at
+            FROM circle_members
+            WHERE circle_id = ?
+            ORDER BY joined_at, resident_id
+            """,
+            (circle_id,),
+        )
+        return [
+            CircleMember(
+                id=row["id"],
+                circle_id=row["circle_id"],
+                resident_id=row["resident_id"],
+                joined_at=parse_dt(row["joined_at"]),  # type: ignore[arg-type]
+            )
+            for row in rows
+        ]
 
     def add_circle_member(self, *, circle_id: str, resident_id: str) -> CircleMember:
         circle_member_id = new_id("circle_member")

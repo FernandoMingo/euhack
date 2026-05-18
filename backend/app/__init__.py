@@ -2,8 +2,12 @@ from .db import connect, init_db
 from .logging_config import configure_logging
 from .matching import (
     DEFAULT_MODEL_VERSION,
+    CircleEngine,
+    GroupingResult,
     MatchingEngine,
     MatchResult,
+    ProposedGroup,
+    RejectedResident,
 )
 from .repositories import (
     ActivityRepository,
@@ -28,7 +32,11 @@ __all__ = [
     "RatingRepository",
     "ReferralRepository",
     "ResidentRepository",
+    "CircleEngine",
+    "GroupingResult",
     "MatchingEngine",
     "MatchResult",
+    "ProposedGroup",
+    "RejectedResident",
     "DEFAULT_MODEL_VERSION",
 ]

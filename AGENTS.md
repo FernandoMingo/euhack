@@ -66,11 +66,13 @@ Feature-by-feature, with file references and commits.
 | Testing + structured logging | `backend/app/logging_config.py`, `backend/tests/*` | `2f78bfa` |
 | Activity templates catalog (131 activities) | `backend/sql/002_activity_templates.sql`, `backend/data/activity_catalog.json`, `backend/app/seed.py`, `backend/app/repositories/activity_template_repository.py`, `backend/scripts/seed_activity_catalog.py`, `backend/tests/test_activity_templates.py` | `7bf6a6a` |
 | Vectorizer + deterministic matching engine v1 | `backend/sql/003_matching_template_refs.sql`, `backend/app/matching/*.py`, `backend/app/repositories/resident_repository.py`, `backend/tests/test_matching_engine.py` | `e3525b8` |
+| Deterministic people/group matching v1 (circle engine) | `backend/sql/004_circle_template_refs.sql`, `backend/app/matching/grouping.py`, `backend/app/repositories/activity_repository.py`, `backend/app/dataclasses.py`, `backend/tests/test_circle_engine.py` | _pending_ |
 
 ### Not built yet
 - Behavioral signals (recent attendance / feedback decay) in the resident vectorizer
-- Service layer composing repositories + matching engine for end-to-end flows (referral → matching → operator review)
-- HTTP/API layer
+- Service layer composing repositories + matching engines for end-to-end flows (referral → activity ranking → circle matching → operator review)
+- Promotion of operator-approved proposed circles into invitations
+- HTTP/API layer integrating the circle engine into operator dashboards
 - Frontend
 
 ---
@@ -97,7 +99,8 @@ euhack/
 │   │   │   ├── constraints.py         (hard-constraint checks)
 │   │   │   ├── scoring.py             (pure cosine + weighted score)
 │   │   │   ├── explain.py             (summary + structured rationale)
-│   │   │   └── engine.py              (orchestrator: persist + rank)
+│   │   │   ├── engine.py              (activity-ranking orchestrator)
+│   │   │   └── grouping.py            (deterministic circle/group matching v1)
 │   │   └── repositories/
 │   │       ├── base.py
 │   │       ├── resident_repository.py
@@ -112,13 +115,15 @@ euhack/
 │   ├── sql/
 │   │   ├── 001_initial_schema.sql
 │   │   ├── 002_activity_templates.sql
-│   │   └── 003_matching_template_refs.sql
+│   │   ├── 003_matching_template_refs.sql
+│   │   └── 004_circle_template_refs.sql
 │   └── tests/
 │       ├── test_db_schema.py
 │       ├── test_repositories.py
 │       ├── test_logging.py
 │       ├── test_activity_templates.py
-│       └── test_matching_engine.py
+│       ├── test_matching_engine.py
+│       └── test_circle_engine.py
 ```
 
 ---
@@ -201,19 +206,31 @@ Each template carries structured attributes used for vectorization:
 
 ## 10. Next feature to build
 
-**Feature 6: Behavioral signals in the resident vectorizer + service layer.**
+**Feature 7: Behavioral signals + end-to-end service layer.**
 
-The deterministic matching engine v1 is now built (see section 5). The next
-work is to feed behavioral signals into the resident vector and to wrap the
-engine in a service layer for end-to-end flows.
+The deterministic activity-ranking engine (feature 5) and the
+deterministic circle/group matching engine (feature 6) are now both
+built (see section 5). The next work is to feed behavioral signals into
+the resident vector and to wrap both engines in a service layer for
+end-to-end flows.
 
 Scope:
 1. Fold recent attendance and feedback signals into resident feature weights
    with exponential decay (e.g. `0.95^weeks`).
-2. Add a service layer that composes repositories + `MatchingEngine` for
-   referral acceptance → matching → operator review.
-3. Wire `audit_events` rows around every state transition (referral
-   acceptance, matching run, operator decision).
+2. Add a service layer that composes repositories + `MatchingEngine` +
+   `CircleEngine` for referral acceptance → activity ranking → circle
+   matching → operator review.
+3. Promote operator-approved proposed circles into invitations.
+4. Wire `audit_events` rows around every state transition (referral
+   acceptance, activity-ranking run, circle-matching run, operator
+   decision, invitation send).
+
+Group-fit weights in use (feature 6, sum to 1.0):
+- `template_fit`: 0.50
+- `availability_density`: 0.20 (saturates at 3 shared buckets)
+- `interest_overlap`: 0.15 (saturates at 3 shared interest/theme keys)
+- `group_size_comfort`: 0.10
+- `social_energy_consistency`: 0.05
 
 Feature key naming conventions in use (residents + activity templates):
 - `interest:<value>`

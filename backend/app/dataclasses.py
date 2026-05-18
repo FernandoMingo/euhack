@@ -178,12 +178,13 @@ class Activity:
 @dataclass(slots=True)
 class Circle:
     id: str
-    activity_id: str
     status: CircleStatus
     fit_score: float | None
     shared_signals_json: str
     created_at: datetime
     updated_at: datetime
+    activity_id: str | None = None
+    template_id: str | None = None
 
 
 @dataclass(slots=True)
