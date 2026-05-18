@@ -3,23 +3,17 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from app.db import DB_PATH, engine
+from app.db import engine, reset_db
 from app.main import app
+from app.seed import seed_demo_data
+from sqlmodel import Session
 
 
 @pytest.fixture()
 def client() -> TestClient:
     engine.dispose()
-    if DB_PATH.exists():
-        DB_PATH.unlink()
+    reset_db()
+    with Session(engine) as session:
+        seed_demo_data(session)
     with TestClient(app) as test_client:
         yield test_client
-
-
-@pytest.fixture()
-def headers() -> dict[str, dict[str, str]]:
-    return {
-        "operator": {"x-actor-role": "operator", "x-actor-id": "operator_001"},
-        "resident": {"x-actor-role": "resident", "x-actor-id": "resident_123"},
-        "professional": {"x-actor-role": "professional", "x-actor-id": "professional_456"},
-    }

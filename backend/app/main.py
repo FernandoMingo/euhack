@@ -1,58 +1,46 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Request
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
-from app.api.ai import router as ai_router
-from app.api.operator import router as operator_router
-from app.api.professional import router as professional_router
-from app.api.resident import router as resident_router
-from app.core.request_context import RequestContextMiddleware
-from app.core.response import error_response, ok_response
-from app.db import Session, create_db_and_tables, engine
-from app.seed.seed_data import seed_demo_data
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from sqlmodel import Session
 
-app = FastAPI(
-    title="CivicCircles Backend",
-    description="FastAPI backend for CivicCircles hackathon prototype",
-    version="0.1.0",
-    openapi_tags=[
-        {"name": "resident", "description": "Resident APIs"},
-        {"name": "professional", "description": "Trusted professional APIs"},
-        {"name": "operator", "description": "City operator APIs"},
-        {"name": "ai", "description": "Deterministic AI simulation APIs"},
-    ],
-)
-
-app.add_middleware(RequestContextMiddleware)
+from app.db import create_db_and_tables, engine
+from app.routes.ai import router as ai_router
+from app.routes.operator import router as operator_router
+from app.routes.professional import router as professional_router
+from app.routes.resident import router as resident_router
+from app.seed import seed_demo_data
 
 
-@app.on_event("startup")
-def startup_event() -> None:
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     create_db_and_tables()
     with Session(engine) as session:
         seed_demo_data(session)
+    yield
+
+app = FastAPI(
+    title="CivicCircles Prototype API",
+    description="Deterministic FastAPI + SQLite prototype for low-pressure social prescribing.",
+    version="0.2.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    reason_code = "HTTP_ERROR"
-    if exc.status_code == 404:
-        reason_code = "NOT_FOUND"
-    if exc.status_code == 403:
-        reason_code = "FORBIDDEN"
-    if exc.status_code == 401:
-        reason_code = "UNAUTHORIZED"
-    return error_response(str(exc.detail), request, reason_code=reason_code, status_code=exc.status_code)
-
-
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception):
-    return error_response(str(exc), request, reason_code="INTERNAL_ERROR", status_code=500)
-
-
-@app.get("/health", tags=["system"])
-def health(request: Request):
-    return ok_response({"status": "healthy"}, request)
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "healthy"}
 
 
 app.include_router(resident_router)

@@ -1,55 +1,35 @@
-# CivicCircles Python Backend
+# CivicCircles Backend
 
-FastAPI + SQLite backend implementing the CivicCircles project specification for prototype and demo flows.
+FastAPI + SQLite prototype API for the Sofia demo flow.
 
-## Run locally
-
-```bash
-python3 -m pip install --target .deps fastapi uvicorn sqlmodel pydantic
-PYTHONPATH=".deps:." uvicorn app.main:app --reload
-```
-
-## Run tests
+## Run
 
 ```bash
-python3 -m pip install --target .deps fastapi uvicorn sqlmodel pydantic pytest httpx
-PYTHONPATH=".deps:." pytest tests
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+cp .env.example .env
+python -m app.seed --reset
+uvicorn app.main:app --reload
 ```
 
-### Full suite (recommended)
+## Key Endpoints
 
-```bash
-bash scripts/run_full_test_suite.sh
-```
+- `GET /api/resident/me`
+- `GET /api/resident/invitations`
+- `POST /api/invitations/{id}/accept`
+- `POST /api/invitations/{id}/decline`
+- `POST /api/activities/{id}/check-in`
+- `GET /api/activities/{id}/circle-reveal`
+- `POST /api/activities/{id}/feedback`
+- `GET /api/professionals/referrals`
+- `PATCH /api/residents/{id}/preferences`
+- `GET /api/operator/proposals`
+- `POST /api/operator/proposals/{id}/approve`
+- `POST /api/operator/proposals/{id}/reject`
+- `GET /api/operator/matching-graph/{circleId}`
+- `GET /api/operator/audit/{activityId}`
+- `POST /api/ai/rank-activities`
+- `POST /api/ai/explain-match`
 
-This runs:
-- acceptance + unit + security/negative + determinism tests
-- coverage report (`coverage.xml` plus terminal missing-lines output)
-- end-to-end demo scenario runner checks
-
-## Generate fake users and watch full flow
-
-Run a population simulation that:
-- creates fake residents with consent + profile data
-- runs ranking, explanation, proposal generation, and operator approval
-- sends and accepts invitations per cohort
-- writes reports showing matches, top suggested activities, scores, and rationale signals
-
-```bash
-PYTHONPATH=".deps:." python scripts/simulate_population_flow.py --users 30 --group-size 5 --seed 42
-```
-
-Outputs are written to `backend/reports/` as:
-- `simulation_<timestamp>.json` (full machine-readable result)
-- `simulation_<timestamp>.md` (easy-to-read summary)
-
-## API groups
-- `resident`: invitations, RSVP, check-in, circle reveal, feedback, connection request
-- `professional`: signup, referral, profile creation, preference updates
-- `operator`: proposal review actions, matching graph, safety/privacy audit, equity
-- `ai`: deterministic circle generation, ranking, proposal generation, explainability, preference updates
-
-## Notes
-- Uses mock role headers (`x-actor-role`, `x-actor-id`) by design for prototype speed.
-- Response contract is standardized as `{ ok, data, error, meta }`.
-- Demo seed data includes Sofia scenario from the spec.
+No auth headers are needed. Demo resident is Sofia.

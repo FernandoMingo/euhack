@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --radius: 1.25rem;
+  --background: oklch(0.962 0.012 80);
+  --foreground: oklch(0.305 0.008 150);
+  --card: oklch(0.992 0.008 90);
+  --card-foreground: oklch(0.305 0.008 150);
+  --secondary: oklch(0.94 0.014 80);
+  --secondary-foreground: oklch(0.305 0.008 150);
+  --muted: oklch(0.94 0.014 80);
+  --muted-foreground: oklch(0.55 0.012 155);
+  --border: oklch(0.9 0.012 80);
+  --input: oklch(0.9 0.012 80);
+  --sage: oklch(0.78 0.04 145);
+  --mist: oklch(0.83 0.04 235);
+  --peach: oklch(0.86 0.045 50);
+  --shadow-soft: 0 1px 2px rgba(47, 52, 48, 0.04), 0 8px 24px -8px rgba(47, 52, 48, 0.08);
+  --shadow-float: 0 2px 4px rgba(47, 52, 48, 0.05), 0 20px 40px -16px rgba(47, 52, 48, 0.14);
+  color-scheme: light;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: Inter, "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.paper-line {
+  background-image:
+    linear-gradient(rgba(110, 106, 97, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(110, 106, 97, 0.045) 1px, transparent 1px);
+  background-size: 38px 38px;
+}
+
+.map-3d {
+  transform: perspective(900px) rotateX(12deg) rotateZ(-1deg);
+  transform-origin: center;
+}
+
+.tap-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.cc-pin {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: #fffdf8;
+  border: 1px solid #e3ded4;
+  box-shadow: 0 4px 12px rgba(47, 52, 48, 0.12);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.cc-pin:hover {
+  transform: translateY(-2px);
+}
+
+.cc-pin svg {
+  color: #6f7a72;
+}
+
+.mapboxgl-ctrl-logo,
+.mapboxgl-ctrl-attrib {
+  opacity: 0.5;
+}
