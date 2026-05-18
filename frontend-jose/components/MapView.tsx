@@ -37,6 +37,9 @@ export function MapView({ events, selectedId, onSelect }: MapViewProps) {
     mapRef.current = map;
 
     map.on("load", () => {
+      // Resize once tiles are ready so the canvas matches its container
+      // even if dimensions were uncertain when init ran.
+      map.resize();
       for (const event of events) {
         const el = document.createElement("div");
         el.className = "cc-pin";
@@ -50,7 +53,12 @@ export function MapView({ events, selectedId, onSelect }: MapViewProps) {
       }
     });
 
+    // Resize on window changes too — flex parent dimensions can change.
+    const handleResize = () => map.resize();
+    window.addEventListener("resize", handleResize);
+
     return () => {
+      window.removeEventListener("resize", handleResize);
       map.remove();
       mapRef.current = null;
       markersRef.current = {};
@@ -114,8 +122,12 @@ export function MapView({ events, selectedId, onSelect }: MapViewProps) {
   }
 
   return (
-    <div className="relative h-full w-full">
-      <div ref={containerRef} className="absolute inset-0" />
+    <div className="relative h-full w-full" style={{ minHeight: "300px" }}>
+      <div
+        ref={containerRef}
+        className="absolute inset-0"
+        style={{ width: "100%", height: "100%" }}
+      />
       <button
         type="button"
         onClick={() => setMode((m) => (m === "2D" ? "3D" : "2D"))}

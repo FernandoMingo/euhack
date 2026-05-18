@@ -20,26 +20,33 @@ export default function ResidentMapPage() {
   }
 
   return (
-    <div className="relative h-[calc(100dvh-3.5rem)] w-full">
-      {/* Map fills, right aside on desktop */}
-      <div className="absolute inset-0 lg:right-[440px]">
+    <div className="flex h-[calc(100dvh-3.5rem)] w-full">
+      {/* Map column: takes remaining width */}
+      <div className="relative flex-1">
         <MapView
           events={demoEvents}
           selectedId={selectedId}
           onSelect={handleSelect}
         />
-      </div>
 
-      {/* Floating greeting */}
-      <div className="pointer-events-none absolute left-1/2 top-4 z-10 w-full max-w-md -translate-x-1/2 px-4">
-        <div className="pointer-events-auto space-y-2">
-          <Greeting invitationCount={demoEvents.length} />
-          <Chip tone="sage">Small groups · Hosted · No pressure</Chip>
+        {/* Floating greeting overlay */}
+        <div className="pointer-events-none absolute left-1/2 top-4 z-10 w-full max-w-md -translate-x-1/2 px-4">
+          <div className="pointer-events-auto space-y-2">
+            <Greeting invitationCount={demoEvents.length} />
+            <Chip tone="sage">Small groups · Hosted · No pressure</Chip>
+          </div>
+        </div>
+
+        {/* Mobile bottom sheet */}
+        <div className="lg:hidden">
+          <BottomSheet open={sheetOpen} onClose={() => setSheetOpen(false)}>
+            {selected && <InvitationCard event={selected} />}
+          </BottomSheet>
         </div>
       </div>
 
       {/* Desktop right aside */}
-      <aside className="absolute right-0 top-0 hidden h-full w-[440px] flex-col overflow-y-auto border-l border-border bg-card p-6 lg:flex">
+      <aside className="hidden w-[440px] flex-col overflow-y-auto border-l border-border bg-card p-6 lg:flex">
         {selected ? (
           <InvitationCard event={selected} />
         ) : (
@@ -52,13 +59,6 @@ export default function ResidentMapPage() {
           </div>
         )}
       </aside>
-
-      {/* Mobile bottom sheet */}
-      <div className="lg:hidden">
-        <BottomSheet open={sheetOpen} onClose={() => setSheetOpen(false)}>
-          {selected && <InvitationCard event={selected} />}
-        </BottomSheet>
-      </div>
     </div>
   );
 }
