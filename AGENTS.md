@@ -66,7 +66,7 @@ Feature-by-feature, with file references and commits.
 | Testing + structured logging | `backend/app/logging_config.py`, `backend/tests/*` | `2f78bfa` |
 | Activity templates catalog (131 activities) | `backend/sql/002_activity_templates.sql`, `backend/data/activity_catalog.json`, `backend/app/seed.py`, `backend/app/repositories/activity_template_repository.py`, `backend/scripts/seed_activity_catalog.py`, `backend/tests/test_activity_templates.py` | `7bf6a6a` |
 | Vectorizer + deterministic matching engine v1 | `backend/sql/003_matching_template_refs.sql`, `backend/app/matching/*.py`, `backend/app/repositories/resident_repository.py`, `backend/tests/test_matching_engine.py` | `e3525b8` |
-| Throwaway matching inspector UI | `backend/scripts/serve_matching_ui.py` | _(this commit)_ |
+| Throwaway matching inspector UI | `backend/scripts/serve_matching_ui.py` | `abe8a25` |
 
 ### Not built yet
 - Behavioral signals (recent attendance / feedback decay) in the resident vectorizer
@@ -259,6 +259,7 @@ Planned for v2:
 
 Current branch `fer/features` history:
 ```
+abe8a25 chore: add throwaway matching inspector UI
 592205f chore: expand matching engine test + logging coverage
 cb7c2e2 docs: record feature 5 commit hash in AGENTS.md
 e3525b8 feat: add vectorizer and deterministic matching engine v1
