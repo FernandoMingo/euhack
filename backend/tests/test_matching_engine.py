@@ -340,7 +340,7 @@ class TestMatchingEngine(unittest.TestCase):
         return engine, resident.id
 
     def test_persona_top_candidates_include_photography_walk(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             init_db(db_path=db_path)
             with connect(db_path=db_path) as conn:
@@ -364,7 +364,7 @@ class TestMatchingEngine(unittest.TestCase):
                 self.assertGreater(top.breakdown.cosine, 0.0)
 
     def test_run_persists_all_artifact_tables(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             init_db(db_path=db_path)
             with connect(db_path=db_path) as conn:
@@ -449,7 +449,7 @@ class TestMatchingEngine(unittest.TestCase):
                 self.assertTrue(payload["constraints"]["passed"])
 
     def test_two_runs_produce_same_ordering(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             init_db(db_path=db_path)
             with connect(db_path=db_path) as conn:
@@ -465,7 +465,7 @@ class TestMatchingEngine(unittest.TestCase):
                     self.assertAlmostEqual(r1.breakdown.cosine, r2.breakdown.cosine, places=12)
 
     def test_run_emits_info_logs_at_boundaries(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             init_db(db_path=db_path)
             with connect(db_path=db_path) as conn:
@@ -478,7 +478,7 @@ class TestMatchingEngine(unittest.TestCase):
                 self.assertIn("matching.run end", logs)
 
     def test_vectorizer_emits_debug_logs(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             init_db(db_path=db_path)
             with connect(db_path=db_path) as conn:
@@ -490,7 +490,7 @@ class TestMatchingEngine(unittest.TestCase):
                 self.assertIn("vectorizer.template", logs)
 
     def test_engine_skips_avoidance_match(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
             db_path = Path(tmp_dir) / "test.db"
             init_db(db_path=db_path)
             with connect(db_path=db_path) as conn:
