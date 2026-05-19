@@ -7,6 +7,7 @@ This backend folder contains the first implementation slice for CivicCircles:
 - repository/query layer on top of `sqlite3`
 - activity templates catalog + seed pipeline
 - deterministic vectorizer and matching engine (Feature 5)
+- behavior-aware matching and workflow service (Feature 8 slice)
 
 ## What is implemented
 
@@ -23,6 +24,8 @@ This backend folder contains the first implementation slice for CivicCircles:
   - `activity_template_tags` for taxonomy tags used in vectorization
 - `sql/003_matching_template_refs.sql`:
   - relaxes the `activity_id` foreign key on `match_candidates`, `activity_feature_weights`, and `resident_activity_similarity` so the matching engine can persist explainability rows that reference activity templates as well as concrete activities
+- `sql/004_circle_template_refs.sql`:
+  - relaxes `circles.activity_id` to be nullable and adds a nullable `template_id` column so the circle-matching engine can persist proposed circles anchored either to a concrete approved activity or to an activity template before approval. A CHECK constraint enforces that at least one anchor is set.
 
 ### 2) Python dataclasses
 - File: `app/dataclasses.py`
@@ -211,6 +214,230 @@ Example output (deterministic):
 Two runs over the same input produce the same ordering (tie-break is by
 template `code`), so the engine is fully reproducible for audit purposes.
 
+## Circle matching engine (people / group matching v1)
+
+The package `app/matching/grouping.py` implements Feature 6: a
+deterministic engine that forms small compatible resident groups
+("circles") around a single activity template or an operator-approved
+activity. It reuses the Feature 5 vectorizer, hard-constraint checker
+and scoring helpers, so a resident filtered out of activity ranking is
+also filtered out of circle membership with the same reason strings.
+
+Pipeline (one `CircleEngine.run_grouping` call):
+
+1. **Resolve target.** A `template_code`, `template_id`, or
+   `activity_id` is required. When an `activity_id` is provided the
+   engine reads the concrete activity and infers the underlying
+   template from `activity.activity_type`.
+2. **Vectorize the template** (`build_template_vector`) and load the
+   candidate residents (defaults to `status='active'`).
+3. **Per-resident profiles.** For every candidate the engine builds
+   the resident vector, computes the same template-fit score the
+   activity-ranking engine produces (cosine + soft signals), captures
+   the resident's availability buckets, top interest/theme features
+   and social-energy bucket, and runs
+   `check_template_constraints`. Residents that fail any hard
+   constraint (avoidances, cost band, group-size range, social-energy
+   clash, accessibility/intensity, non-active status) are routed to
+   the rejected pile with their reason strings preserved.
+4. **Deterministic greedy grouping.** Eligible residents are sorted by
+   `(-template_score.total, resident.id)`. The engine repeatedly
+   picks the next available resident as a seed, then grows the group
+   in score order by accepting candidates that:
+   - share at least one availability bucket with every current
+     member,
+   - keep the size within the intersection of every member's
+     `[preferred_group_size_min, preferred_group_size_max]` range,
+   - and respect a configurable `min_group_size` /
+     `max_group_size` window.
+   Each resident is used in at most one proposed circle per run.
+5. **Group-fit scoring** (pure helpers, no DB access):
+
+   | Component | Weight | Description |
+   |---|---|---|
+   | `template_fit` | 0.50 | mean per-resident `total_score` from Feature 5 |
+   | `availability_density` | 0.20 | count of shared availability buckets, saturating at 3 |
+   | `interest_overlap` | 0.15 | size of intersection of positive `interest:` / `theme:` / `attribute:` feature keys, saturating at 3 |
+   | `group_size_comfort` | 0.10 | mean comfort over members; 1.0 inside each member's preferred range, decays linearly outside (zero at distance ≥ 2) |
+   | `social_energy_consistency` | 0.05 | 1 − (distinct social-energy levels − 1) × 0.4 (so a single shared level → 1.0, three different levels → 0.2) |
+
+   Weights sum to 1.0, output clamped to `[0, 1]`. Ranking is sorted by
+   `(-fit_score, tuple(sorted_member_ids))` so two runs over the same
+   input emit the same groups in the same order.
+6. **Persistence + explainability.** A single `matching_runs` row
+   (`run_type='circle_matching'`,
+   `score_algorithm='circle_greedy_v1'`) anchors the run. For every
+   accepted group the engine creates:
+   - a `circles` row (`status='proposed'`, `fit_score`,
+     `shared_signals_json` with `shared_availability` and
+     `shared_interests`),
+   - a `circle_members` row per member,
+   - a `match_candidates` row with `circle_id`,
+     `hard_constraints_passed=1`, the fit score and rank,
+   - one `match_feature_scores` row per group-level component
+     (`group:template_fit`, `group:availability_density`,
+     `group:interest_overlap`, `group:group_size_comfort`,
+     `group:social_energy_consistency`, plus a `group:template_fit_spread`
+     diagnostic),
+   - and a `match_explanations` row with a short summary and a
+     deterministic structured payload describing every member, the
+     shared signals, the score components and the model version.
+
+   For every rejected resident the engine writes a
+   `match_candidates` row (`resident_id`, `hard_constraints_passed=0`)
+   plus a `match_explanations` row capturing the constraint reasons
+   so operators can audit who was filtered and why. Invitations are
+   not sent and peer-rating tables are not read.
+
+## Behavior-aware matching and workflow service (v2)
+
+Feature 8 adds an opt-in v2 path while keeping the v1 engines stable for
+existing callers:
+
+- `app.matching.behavioral` converts safe product interaction data into
+  bounded, decayed signals. It only reads invitations, attendance,
+  resident feedback, and safety flags; it does not read clinical data or raw
+  peer ratings.
+- `MatchingEngine(..., model_version="v2", activities=ActivityRepository(...))`
+  adds behavior and comfort components to the persisted score breakdown.
+  Positive behavior can boost matching on prior templates/families, while
+  negative behavior dampens repeats. The behavior boost is capped so explicit
+  preferences and hard constraints remain primary.
+- `CircleEngine(..., fair_grouping=True, score_algorithm="circle_fair_v2")`
+  seeds groups with a bounded fairness priority for residents with fewer
+  recent successful matches, penalizes groups with large individual-fit spread,
+  and persists eligible-but-unmatched residents with an explanation.
+- `MatchingWorkflowService` composes referral acceptance, v2 activity ranking,
+  fair circle proposals, operator decision audit rows, and invitation
+  promotion for approved activity-backed circles.
+
+The operator-approval rule remains unchanged: proposed circles do not send
+invitations until they are anchored to an approved concrete activity.
+
+## LLM-backed activity planning (Feature 9)
+
+`ActivityPlanningService` turns a proposed circle into an operator-reviewable
+**activity plan** before the operator commits to a concrete `activities` row.
+The planning prompt is now venue-research-first: the model researches actual
+Rotterdam venues online, picks a feasible option, and returns structured JSON
+with `language="English"`, `venue_research` (selected venue, address, URL,
+sources checked), schedule, accessibility/safety notes, materials, invitation
+copy, rationale, and explicit `requires_review_flags`. The LLM only proposes —
+invitations and real activity rows are still created by humans.
+
+Storage: `sql/005_activity_plans.sql` introduces a dedicated `activity_plans`
+table. The row captures the prompt payload, prompt template version,
+model provider/name, structured response, operator decision, edits, and any
+failure reason. Audit events (`activity_plan.requested`,
+`activity_plan.generated`, `activity_plan.failed`,
+`activity_plan.decision.{approved|rejected|edited}`) are written for every
+state transition.
+
+Privacy guardrails enforced in `ActivityPlanningService`:
+
+- The prompt payload only contains activity template attributes/tags, the
+  circle's `shared_signals_json`, the member count, fixed venue-search context
+  (`city=Rotterdam`, `country=NL`, optional operator-supplied `search_area`),
+  fixed `output_language=English`, the optional concrete-activity row, and
+  operator-provided constraints. No user location data is sent to the LLM;
+  venue search is city/search-area based.
+- The JSON schema requires `language="English"`, and the service rejects and
+  audits any generated response that does not declare English.
+- A defensive substring check blocks serialization if forbidden tokens
+  (`diagnos`, `therapy`, `medication`, `peer_rating`, ...) somehow reach the
+  payload.
+- Peer ratings are never read by this service.
+- A fixed system prompt + pinned `PROMPT_VERSION` + version-pinned JSON
+  schema make the artifact reproducible and auditable.
+
+### LLM client
+
+`OpenAIChatLLMClient` (in `app/services/llm_client.py`) wraps the official
+`openai` Python SDK and reads `OPENAI_API_KEY` from the environment. By
+default it uses the Responses API with OpenAI web search enabled so generated
+plans can cite actual Rotterdam venue research. The API CLI (`python -m
+app.api`) loads `.env` from the current working directory before startup, and
+also accepts `.emv` as a typo-tolerant alias. The `openai` package is an
+optional dependency: importing the module never requires it. Tests inject a
+fake client that records prompts and returns canned JSON, so the service can
+be exercised without network access.
+
+The LLM client is injected at app construction time:
+
+```python
+from app.api.main import create_app
+from app.services import OpenAIChatLLMClient
+
+app = create_app(
+    db_path="backend/civiccircles.db",
+    llm_client=OpenAIChatLLMClient(),  # reads OPENAI_API_KEY
+)
+```
+
+For local development, create a repo-root `.env`:
+
+```bash
+OPENAI_API_KEY=sk-...
+```
+
+Then start the API normally:
+
+```bash
+PYTHONPATH="$(pwd)/backend" python3 -m app.api --host 127.0.0.1 --port 8000
+```
+
+If no LLM client is configured, or if the API key / `openai` package is
+missing, the planning endpoints respond with HTTP 503.
+
+### Operator endpoints
+
+- `POST /api/operator/circles/{circle_id}/activity-plan` —
+  generate and persist a draft plan for a proposed circle. Body:
+  `{"operator_constraints": {...}, "requested_by": "operator_1"}`.
+- `GET /api/operator/activity-plans/{plan_id}` — fetch a persisted plan.
+- `GET /api/operator/circles/{circle_id}/activity-plans` — list plans for a
+  circle.
+- `POST /api/operator/activity-plans/{plan_id}/decision` — record an
+  operator decision (`approved` | `rejected` | `edited`) with optional
+  `edits` and `reason`. Decisions are audited; they do not create real
+  activity rows or send invitations.
+
+### Running a circle-matching run
+
+```python
+from app import (
+    ActivityRepository, ActivityTemplateRepository, CircleEngine,
+    MatchingRepository, ResidentRepository, connect, init_db,
+)
+from app.seed import seed_activity_templates
+
+init_db()
+with connect() as conn:
+    seed_activity_templates(conn=conn)
+    residents = ResidentRepository(conn)
+    templates = ActivityTemplateRepository(conn)
+    matching = MatchingRepository(conn)
+    activities = ActivityRepository(conn)
+    # ... create active residents with preferences / availability ...
+    engine = CircleEngine(
+        residents=residents, templates=templates,
+        matching=matching, activities=activities,
+    )
+    result = engine.run_grouping(
+        template_code="photography_walk",
+        top_n=3, min_group_size=3, max_group_size=5,
+    )
+    for group in result.groups:
+        print(group.summary_text)
+```
+
+A typical summary line looks like:
+
+```
+#1 Circle for Photography Walk — 4 residents (Sofia, Marco, Aisha, Bo).
+   Fit 0.74 on sat morning, photography.
+```
+
 ## Notes on ranking and privacy
 
 - The system stores **activity/group matching scores** for explainability and reproducibility.
@@ -253,6 +480,16 @@ Current test coverage includes:
 - logging behavior for DB initialization and repository query execution
 - vectorizer stability, cosine symmetry/bounds, hard-constraint rejection
 - end-to-end matching runs (persona ranking, persisted artifacts, determinism)
+- circle (group) matching: compatible residents grouped together,
+  avoidance / availability / cost rejections, deterministic ordering
+  across runs, and persisted rows for `matching_runs`, `circles`,
+  `circle_members`, `match_candidates`, `match_feature_scores`, and
+  `match_explanations`
+- v2 matching: behavior/comfort score components, fair-grouping unmatched
+  explanations, and approved-circle invitation promotion with audit rows
+- LLM-backed activity planning: deterministic prompt assembly, prompt-safety
+  substring guards, fake-client persistence, audit rows for request /
+  generation / failure / operator decision
 
 ## Logging usage
 
@@ -267,8 +504,7 @@ init_db()
 
 ## Next recommended steps
 
-1. Compose a service layer on top of repositories + matching engine for end-to-end flows (referral acceptance → matching → operator review).
-2. Add behavioral signals (recent attendance, feedback decay) into the resident vectorizer as documented in AGENTS.md section 10.
-3. Expose a thin HTTP/API layer for operator dashboards and trusted-professional consoles.
-4. Add a richer migrations strategy (up/down scripts) for production evolution.
+1. Expose thin HTTP/API routes for the v2 matching workflow service.
+2. Add richer operator review screens for proposed circles, unmatched residents, and audit explanations.
+3. Add a richer migrations strategy (up/down scripts) for production evolution.
 

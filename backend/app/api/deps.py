@@ -21,5 +21,5 @@ def get_connection(request: Request) -> Iterator[Connection]:
 
 
 def get_llm_client(request: Request) -> LLMClient | None:
-    """Return configured LLM client, if app startup injected one."""
+    """Return the configured LLM client (if any) for this app instance."""
     return getattr(request.app.state, "llm_client", None)

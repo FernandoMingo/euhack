@@ -4,6 +4,6 @@ httpx
 pydantic[email]
 uvicorn
 
-# Optional: install `openai` to enable the LLM-backed activity-planning
-# service with OpenAIChatLLMClient. App startup and tests do not require it.
-# openai
+# Optional: enables the LLM-backed activity-planning service.
+# Install openai and set OPENAI_API_KEY to enable OpenAIChatLLMClient.
+openai
