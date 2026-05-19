@@ -25,14 +25,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install fastapi uvicorn sqlmodel pydantic pytest pytest-cov httpx
+          python -m pip install -r backend/requirements.txt
 
-      - name: Run tests with coverage
-        working-directory: backend
+      - name: Run tests
         run: |
-          PYTHONPATH="." pytest tests
-
-      - name: Run scenario runner
-        working-directory: backend
-        run: |
-          PYTHONPATH="." python scenario_runner.py
+          PYTHONPATH="$(pwd)/backend" python -m unittest discover -s backend/tests -p "test_*.py"
