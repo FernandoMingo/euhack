@@ -49,6 +49,7 @@ class MatchingWorkflowService:
         top_n_groups: int = 3,
         min_group_size: int = 3,
         max_group_size: int = 6,
+        preferred_template_code: str | None = None,
     ) -> ReferralMatchingWorkflowResult:
         referral = self.referrals.get_referral(referral_id)
         if referral is None:
@@ -84,11 +85,18 @@ class MatchingWorkflowService:
                 "resident_id": referral.resident_id,
                 "referral_id": referral_id,
                 "top_n": top_n_activities,
+                "preferred_template_code": preferred_template_code,
             },
         )
 
         grouping_result: GroupingResult | None = None
         if top_results:
+            chosen = top_results[0]
+            if preferred_template_code:
+                for candidate in top_results:
+                    if candidate.template.code == preferred_template_code:
+                        chosen = candidate
+                        break
             grouping_engine = CircleEngine(
                 residents=self.residents,
                 templates=self.templates,
@@ -99,7 +107,7 @@ class MatchingWorkflowService:
                 fair_grouping=True,
             )
             grouping_result = grouping_engine.run_grouping(
-                template_id=top_results[0].template.id,
+                template_id=chosen.template.id,
                 top_n=top_n_groups,
                 min_group_size=min_group_size,
                 max_group_size=max_group_size,

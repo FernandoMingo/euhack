@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from app.api.routers import (
     activities,
     consents,
+    demo,
     health,
     invitations,
     operator,
@@ -50,5 +51,6 @@ def create_app(
     app.include_router(invitations.router)
     app.include_router(consents.router)
     app.include_router(operator.router)
+    app.include_router(demo.router)
 
     return app
