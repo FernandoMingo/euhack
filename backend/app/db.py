@@ -50,6 +50,22 @@ def _applied_migrations(conn: sqlite3.Connection) -> set[str]:
     return {row["name"] for row in rows}
 
 
+def _alias_renamed_migration(
+    conn: sqlite3.Connection,
+    applied: set[str],
+    *,
+    old_name: str,
+    new_name: str,
+) -> None:
+    """Record a renamed migration so existing databases skip re-applying it."""
+    if old_name in applied and new_name not in applied:
+        conn.execute(
+            "INSERT INTO _schema_migrations (name, applied_at) VALUES (?, ?)",
+            (new_name, datetime.now(timezone.utc).isoformat()),
+        )
+        applied.add(new_name)
+
+
 def init_db(
     db_path: Path | str = DEFAULT_DB_PATH,
     schema_path: Path | str | None = None,
@@ -76,6 +92,12 @@ def init_db(
     )
     with connect(db_path) as conn:
         applied = _applied_migrations(conn)
+        _alias_renamed_migration(
+            conn,
+            applied,
+            old_name="003_onboarding_fields.sql",
+            new_name="003a_onboarding_fields.sql",
+        )
         for file_path in schema_files:
             if file_path.name in applied:
                 logger.debug("Skipping already-applied migration %s", file_path.name)

@@ -12,7 +12,8 @@ the UI wants:
     to that activity. Operator still needs to click Approve.
   - Approve / reject: records operator decision, flips activity approval,
     sends invitations.
-  - Resident inbox: invitations joined with activity + venue + host.
+  - Resident inbox: thin alias of ``GET /api/residents/{id}/inbox`` (privacy-safe
+    ``resident_inbox_items`` via ``InvitationInboxService`` / ``ResidentInboxRepository``).
   - Check-in + circle-reveal: arrival flips reveal from locked to unlocked.
   - Reflection: thin wrap of /api/activities/{id}/feedback.
   - GP dashboard: referrals + resident summaries.
@@ -31,6 +32,8 @@ from typing import Literal
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
+from app.api import schemas
+from app.api.converters import inbox_item_to_response
 from app.api.deps import get_connection
 from app.repositories import (
     ActivityRepository,
@@ -38,6 +41,7 @@ from app.repositories import (
     MatchingRepository,
     ProfessionalRepository,
     ReferralRepository,
+    ResidentInboxRepository,
     ResidentRepository,
 )
 from app.repositories.base import new_id, utc_now_iso
@@ -152,11 +156,6 @@ class _InvitationOut(BaseModel):
     template_code: str | None
     fit_score: float | None
     members: list[_ResidentSummary]
-
-
-class _ResidentInboxOut(BaseModel):
-    resident: _ResidentSummary
-    invitations: list[_InvitationOut]
 
 
 class _CheckInRequest(BaseModel):
@@ -686,42 +685,25 @@ def reject_proposal(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/residents/{resident_id}/inbox", response_model=_ResidentInboxOut)
+@router.get(
+    "/residents/{resident_id}/inbox",
+    response_model=list[schemas.ResidentInboxItemResponse],
+)
 def resident_inbox(
     resident_id: str,
+    status_filter: schemas.InboxItemStatusLiteral | None = Query(
+        default=None, alias="status"
+    ),
+    limit: int = Query(default=50, ge=1, le=200),
     conn: Connection = Depends(get_connection),
-) -> _ResidentInboxOut:
-    repos = _repos(conn)
-    resident = _resident_summary(repos, resident_id)
-
-    rows = repos.conn.execute(
-        """
-        SELECT id, circle_id, activity_id, status FROM invitations
-         WHERE resident_id = ?
-         ORDER BY sent_at DESC
-        """,
-        (resident_id,),
-    ).fetchall()
-
-    invitations: list[_InvitationOut] = []
-    for row in rows:
-        try:
-            proposal = _proposal_for_circle(repos, row["circle_id"])
-        except HTTPException:
-            continue
-        invitations.append(
-            _InvitationOut(
-                id=row["id"],
-                status=row["status"],
-                activity_id=row["activity_id"],
-                circle_id=row["circle_id"],
-                activity=proposal.activity,
-                template_code=proposal.template_code,
-                fit_score=proposal.fit_score,
-                members=proposal.members,
-            )
-        )
-    return _ResidentInboxOut(resident=resident, invitations=invitations)
+) -> list[schemas.ResidentInboxItemResponse]:
+    """Privacy-safe resident inbox (same data as ``/api/residents/{id}/inbox``)."""
+    if ResidentRepository(conn).get_resident(resident_id) is None:
+        raise HTTPException(status_code=404, detail="Resident not found")
+    items = ResidentInboxRepository(conn).list_for_resident(
+        resident_id=resident_id, status=status_filter, limit=limit
+    )
+    return [inbox_item_to_response(item) for item in items]
 
 
 @router.post("/activities/{activity_id}/check-in")

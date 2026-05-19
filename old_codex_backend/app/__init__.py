@@ -1,1 +1,0 @@
-"""CivicCircles backend package."""

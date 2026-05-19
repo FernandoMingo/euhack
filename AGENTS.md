@@ -69,7 +69,7 @@ Feature-by-feature, with file references and commits.
 | Activity templates catalog (131 activities) | `backend/sql/002_activity_templates.sql`, `backend/data/activity_catalog.json`, `backend/app/seed.py`, `backend/app/repositories/activity_template_repository.py`, `backend/scripts/seed_activity_catalog.py`, `backend/tests/test_activity_templates.py` | `7bf6a6a` |
 | Vectorizer + deterministic matching engine v1 | `backend/sql/003_matching_template_refs.sql`, `backend/app/matching/*.py`, `backend/app/repositories/resident_repository.py`, `backend/tests/test_matching_engine.py` | `e3525b8` |
 | Deterministic people/group matching v1 (circle engine) | `backend/sql/004_circle_template_refs.sql`, `backend/app/matching/grouping.py`, `backend/app/repositories/activity_repository.py`, `backend/app/dataclasses.py`, `backend/tests/test_circle_engine.py` | `f314946` |
-| GP onboarding service + stub verification | `backend/sql/003_onboarding_fields.sql`, `backend/app/services/*.py`, `backend/app/repositories/professional_repository.py`, `backend/app/repositories/consent_repository.py`, `backend/app/repositories/referral_repository.py`, `backend/tests/test_onboarding_service.py` | `0892299` / `842b397` merge |
+| GP onboarding service + stub verification | `backend/sql/003a_onboarding_fields.sql`, `backend/app/services/*.py`, `backend/app/repositories/professional_repository.py`, `backend/app/repositories/consent_repository.py`, `backend/app/repositories/referral_repository.py`, `backend/tests/test_onboarding_service.py` | `0892299` / `842b397` merge |
 | FastAPI HTTP API across core repositories | `backend/app/api/**/*.py`, `backend/requirements.txt`, `backend/tests/test_api_*.py`, `backend/tests/test_onboarding_api.py` | `2b6659a` / `842b397` merge |
 | Behavioral matching v2 + fair grouping workflow slice | `backend/app/matching/behavioral.py`, `backend/app/matching/vectorizer.py`, `backend/app/matching/scoring.py`, `backend/app/matching/engine.py`, `backend/app/matching/grouping.py`, `backend/app/services/matching_service.py`, `backend/tests/test_matching_service.py` | pending |
 | LLM-backed activity planning (operator-reviewable plans) | `backend/sql/005_activity_plans.sql`, `backend/app/services/activity_planning_service.py`, `backend/app/services/llm_client.py`, `backend/app/repositories/activity_plan_repository.py`, `backend/app/api/routers/operator.py`, `backend/tests/test_activity_planning_service.py`, `backend/tests/test_api_activity_planning.py` | pending |
@@ -142,7 +142,7 @@ euhack/
 │   ├── sql/
 │   │   ├── 001_initial_schema.sql
 │   │   ├── 002_activity_templates.sql
-│   │   ├── 003_onboarding_fields.sql
+│   │   ├── 003a_onboarding_fields.sql
 │   │   ├── 003_matching_template_refs.sql
 │   │   ├── 004_circle_template_refs.sql
 │   │   ├── 005_activity_plans.sql
