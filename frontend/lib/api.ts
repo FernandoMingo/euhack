@@ -67,6 +67,12 @@ export type Invitation = {
   status: "sent" | "accepted" | "declined";
   companion_pass_available: boolean;
   activity: Activity;
+  checked_in?: boolean;
+  check_in_at?: string | null;
+  attendance_status?: string | null;
+  relevance_score?: number;
+  why_it_fits?: string[];
+  city?: string;
 };
 
 export type RevealAttendee = {
@@ -94,7 +100,7 @@ export type Referral = {
   };
 };
 
-export type Proposal = {
+export type LegacyProposal = {
   id: string;
   activity_id: string;
   title: string;
@@ -205,12 +211,12 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ preferences }),
     }),
-  proposals: () => request<Proposal[]>("/api/operator/proposals").catch(() => [] as Proposal[]),
-  proposal: (id: string) => request<Proposal>(`/api/operator/proposals/${id}`),
+  proposals: () => request<LegacyProposal[]>("/api/operator/proposals").catch(() => [] as LegacyProposal[]),
+  proposal: (id: string) => request<LegacyProposal>(`/api/operator/proposals/${id}`),
   approve: (id: string) =>
-    request<Proposal>(`/api/operator/proposals/${id}/approve`, { method: "POST" }),
+    request<LegacyProposal>(`/api/operator/proposals/${id}/approve`, { method: "POST" }),
   reject: (id: string) =>
-    request<Proposal>(`/api/operator/proposals/${id}/reject`, { method: "POST" }),
+    request<LegacyProposal>(`/api/operator/proposals/${id}/reject`, { method: "POST" }),
   graph: (circleId = "circle_photo_walk") =>
     request<MatchingGraph>(`/api/operator/matching-graph/${circleId}`).catch(() => ({
       circle_id: circleId,
@@ -250,4 +256,161 @@ export const api = {
           guardrail: "",
         } as Explanation)
     ),
+
+  // Demo orchestration
+  operatorInbox: () => request<OperatorInbox>("/api/demo/operator/inbox"),
+  orchestrateReferral: (referralId: string, body?: { operator_id?: string; preferred_template_code?: string | null }) =>
+    request<Proposal>(`/api/demo/operator/referrals/${referralId}/orchestrate`, {
+      method: "POST",
+      body: JSON.stringify(body ?? {}),
+    }),
+  approveProposal: (circleId: string, body?: { operator_id?: string; reason?: string | null }) =>
+    request<DemoInvitation[]>(`/api/demo/operator/circles/${circleId}/approve`, {
+      method: "POST",
+      body: JSON.stringify(body ?? {}),
+    }),
+  rejectProposal: (circleId: string, body?: { operator_id?: string; reason?: string | null }) =>
+    request<Proposal>(`/api/demo/operator/circles/${circleId}/reject`, {
+      method: "POST",
+      body: JSON.stringify(body ?? {}),
+    }),
+  residentInbox: (residentId: string) =>
+    request<ResidentInbox>(`/api/demo/residents/${residentId}/inbox`),
 };
+
+// ---------- Demo response types (mirror backend/app/api/routers/demo.py) ----------
+
+export interface DemoVenue {
+  id: string;
+  name: string;
+  address: string;
+  city: string;
+  lat: number | null;
+  lng: number | null;
+}
+
+export interface DemoHost {
+  id: string;
+  full_name: string;
+  host_type: string;
+}
+
+export interface DemoActivity {
+  id: string;
+  title: string;
+  activity_type: string;
+  start_at: string;
+  end_at: string;
+  capacity: number;
+  cost_cents: number;
+  risk_level: string;
+  approval_status: string;
+  venue: DemoVenue;
+  host: DemoHost | null;
+}
+
+export interface ResidentSummary {
+  id: string;
+  first_name: string;
+  neighborhood: string | null;
+  social_comfort: string;
+  preferred_group_size_min: number;
+  preferred_group_size_max: number;
+}
+
+export interface ProfessionalSummary {
+  id: string;
+  full_name: string;
+  role: string;
+  organization: string | null;
+  city: string | null;
+  verification_status: string;
+}
+
+export interface PendingReferral {
+  referral_id: string;
+  referral_reason: string | null;
+  created_at: string;
+  resident: ResidentSummary;
+  professional: ProfessionalSummary;
+  consent_text_version: string;
+}
+
+export interface Proposal {
+  circle_id: string;
+  activity: DemoActivity;
+  template_code: string;
+  template_title: string;
+  fit_score: number | null;
+  shared_interests: string[];
+  shared_availability: string[];
+  members: ResidentSummary[];
+  summary_text: string;
+  consent_text_version: string;
+}
+
+export interface OperatorInbox {
+  pending_referrals: PendingReferral[];
+  proposals: Proposal[];
+  consent_text_version: string;
+}
+
+export interface DemoInvitation {
+  id: string;
+  status: "sent" | "accepted" | "declined" | "expired";
+  activity_id: string;
+  circle_id: string;
+  activity: DemoActivity;
+  template_code: string | null;
+  fit_score: number | null;
+  members: ResidentSummary[];
+}
+
+export interface ResidentInbox {
+  resident: ResidentSummary;
+  invitations: DemoInvitation[];
+}
+
+export interface ProfessionalDashboard {
+  professional: ProfessionalSummary;
+  referrals: PendingReferral[];
+}
+
+// ---------- Demo session (localStorage) ----------
+
+const DEMO_STORAGE_KEY = "cc.demo.session.v1";
+
+export interface DemoSession {
+  professional_id?: string;
+  professional_name?: string;
+  resident_id?: string;
+  resident_first_name?: string;
+  referral_id?: string;
+  circle_id?: string;
+  activity_id?: string;
+  invitation_id?: string;
+}
+
+export function readDemoSession(): DemoSession {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(DEMO_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as DemoSession) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function writeDemoSession(patch: Partial<DemoSession>): DemoSession {
+  if (typeof window === "undefined") return patch as DemoSession;
+  const next = { ...readDemoSession(), ...patch };
+  window.localStorage.setItem(DEMO_STORAGE_KEY, JSON.stringify(next));
+  return next;
+}
+
+export function resetDemoSession(): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(DEMO_STORAGE_KEY);
+}

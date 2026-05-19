@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Check, CircleDot, ShieldCheck, Sparkles, X } from "lucide-react";
-import { Audit, Explanation, MatchingGraph, Proposal, Ranking, api } from "@/lib/api";
+import { Audit, Explanation, LegacyProposal, MatchingGraph, Ranking, api } from "@/lib/api";
 
 export function OperatorDashboard() {
-  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [proposals, setProposals] = useState<LegacyProposal[]>([]);
   const [graph, setGraph] = useState<MatchingGraph | null>(null);
   const [audit, setAudit] = useState<Audit | null>(null);
   const [ranking, setRanking] = useState<Ranking | null>(null);
