@@ -522,7 +522,20 @@ def orchestrate_referral(
             detail="No proposed circles for this referral. Need more residents in the pool.",
         )
 
-    top_group = grouping.groups[0]
+    referral = repos.referrals.get_referral(referral_id)
+    referred_resident_id = referral.resident_id if referral else None
+
+    # Prefer the top group that actually contains the referred resident.
+    # If matching put Sofia in no group (it's fair-grouping; she may have
+    # tied with others), fall back to the top group and append her below.
+    top_group = next(
+        (
+            g
+            for g in grouping.groups
+            if any(m.id == referred_resident_id for m in g.members)
+        ),
+        grouping.groups[0],
+    )
     if top_group.circle is None:
         raise HTTPException(
             status_code=500,
@@ -555,6 +568,20 @@ def orchestrate_referral(
         "UPDATE circles SET activity_id = ?, updated_at = ? WHERE id = ?",
         (activity.id, utc_now_iso(), top_group.circle.id),
     )
+
+    # Safety net: if the referred resident is not yet a member of the chosen
+    # circle, add her. The demo can't tell Sofia's story without Sofia in it.
+    if referred_resident_id is not None:
+        existing_member_ids = {
+            m.resident_id
+            for m in repos.activities.list_circle_members(circle_id=top_group.circle.id)
+        }
+        if referred_resident_id not in existing_member_ids:
+            repos.activities.add_circle_member(
+                circle_id=top_group.circle.id,
+                resident_id=referred_resident_id,
+            )
+
     repos.conn.commit()
 
     return _proposal_for_circle(repos, top_group.circle.id)

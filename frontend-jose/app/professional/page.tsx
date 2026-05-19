@@ -5,10 +5,18 @@ import { ProfessionalSignup } from "@/components/ProfessionalSignup";
 import { ReferralFlow } from "@/components/ReferralFlow";
 import { Chip } from "@/components/Chip";
 import { Stethoscope, UserCheck } from "lucide-react";
-import type { Professional } from "@/lib/api";
+import { writeDemoSession, type Professional } from "@/lib/api";
 
 export default function ProfessionalPage() {
   const [professional, setProfessional] = useState<Professional | null>(null);
+
+  function handleApproved(p: Professional) {
+    setProfessional(p);
+    writeDemoSession({
+      professional_id: p.id,
+      professional_name: p.full_name,
+    });
+  }
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
@@ -35,7 +43,7 @@ export default function ProfessionalPage() {
               </span>
               Track A · sign your practice in
             </div>
-            <ProfessionalSignup onApproved={setProfessional} />
+            <ProfessionalSignup onApproved={handleApproved} />
           </section>
 
           <section className="rounded-3xl border border-border bg-secondary/50 p-6">

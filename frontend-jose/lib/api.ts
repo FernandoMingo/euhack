@@ -336,7 +336,202 @@ export const api = {
         circle_id: string | null;
       }>
     >(`/api/operator/matching-runs/${runId}/candidates?limit=${limit}`),
+
+  // Demo orchestration (see backend/app/api/routers/demo.py)
+  operatorInbox: () => request<OperatorInbox>("/api/demo/operator/inbox"),
+  orchestrateReferral: (referralId: string, body?: { operator_id?: string; preferred_template_code?: string | null }) =>
+    request<Proposal>(`/api/demo/operator/referrals/${referralId}/orchestrate`, {
+      method: "POST",
+      json: body ?? {},
+    }),
+  approveProposal: (circleId: string, body?: { operator_id?: string; reason?: string | null }) =>
+    request<DemoInvitation[]>(`/api/demo/operator/circles/${circleId}/approve`, {
+      method: "POST",
+      json: body ?? {},
+    }),
+  rejectProposal: (circleId: string, body?: { operator_id?: string; reason?: string | null }) =>
+    request<Proposal>(`/api/demo/operator/circles/${circleId}/reject`, {
+      method: "POST",
+      json: body ?? {},
+    }),
+  residentInbox: (residentId: string) =>
+    request<ResidentInbox>(`/api/demo/residents/${residentId}/inbox`),
+  checkIn: (activityId: string, residentId: string) =>
+    request<{ checked_in: boolean; activity_id: string; resident_id: string }>(
+      `/api/demo/activities/${activityId}/check-in`,
+      { method: "POST", json: { resident_id: residentId } }
+    ),
+  circleReveal: (activityId: string, residentId: string) =>
+    request<CircleReveal>(
+      `/api/demo/activities/${activityId}/circle-reveal?resident_id=${encodeURIComponent(residentId)}`
+    ),
+  submitReflection: (
+    activityId: string,
+    body: {
+      resident_id: string;
+      felt_after?: "worse" | "same" | "better" | null;
+      would_repeat?: boolean | null;
+      notes?: string | null;
+    }
+  ) =>
+    request<{ saved: boolean; feedback_id: string }>(
+      `/api/demo/activities/${activityId}/reflection`,
+      { method: "POST", json: body }
+    ),
+  professionalDashboard: (professionalId: string) =>
+    request<ProfessionalDashboard>(
+      `/api/demo/professionals/${professionalId}/dashboard`
+    ),
 };
+
+// ---------- Demo response shapes (match backend/app/api/routers/demo.py) ----------
+
+export interface DemoVenue {
+  id: string;
+  name: string;
+  address: string;
+  city: string;
+  lat: number | null;
+  lng: number | null;
+}
+
+export interface DemoHost {
+  id: string;
+  full_name: string;
+  host_type: string;
+}
+
+export interface DemoActivity {
+  id: string;
+  title: string;
+  activity_type: string;
+  start_at: string;
+  end_at: string;
+  capacity: number;
+  cost_cents: number;
+  risk_level: string;
+  approval_status: string;
+  venue: DemoVenue;
+  host: DemoHost | null;
+}
+
+export interface ResidentSummary {
+  id: string;
+  first_name: string;
+  neighborhood: string | null;
+  social_comfort: string;
+  preferred_group_size_min: number;
+  preferred_group_size_max: number;
+}
+
+export interface ProfessionalSummary {
+  id: string;
+  full_name: string;
+  role: string;
+  organization: string | null;
+  city: string | null;
+  verification_status: string;
+}
+
+export interface PendingReferral {
+  referral_id: string;
+  referral_reason: string | null;
+  created_at: string;
+  resident: ResidentSummary;
+  professional: ProfessionalSummary;
+  consent_text_version: string;
+}
+
+export interface Proposal {
+  circle_id: string;
+  activity: DemoActivity;
+  template_code: string;
+  template_title: string;
+  fit_score: number | null;
+  shared_interests: string[];
+  shared_availability: string[];
+  members: ResidentSummary[];
+  summary_text: string;
+  consent_text_version: string;
+}
+
+export interface OperatorInbox {
+  pending_referrals: PendingReferral[];
+  proposals: Proposal[];
+  consent_text_version: string;
+}
+
+export interface DemoInvitation {
+  id: string;
+  status: "sent" | "accepted" | "declined" | "expired";
+  activity_id: string;
+  circle_id: string;
+  activity: DemoActivity;
+  template_code: string | null;
+  fit_score: number | null;
+  members: ResidentSummary[];
+}
+
+export interface ResidentInbox {
+  resident: ResidentSummary;
+  invitations: DemoInvitation[];
+}
+
+export interface RevealAttendee {
+  first_name: string;
+  common_ground: string[];
+  conversation_starter: string;
+}
+
+export interface CircleReveal {
+  activity_id: string;
+  locked: boolean;
+  attendees: RevealAttendee[];
+}
+
+export interface ProfessionalDashboard {
+  professional: ProfessionalSummary;
+  referrals: PendingReferral[];
+}
+
+// ---------- Demo session (localStorage) ----------
+
+const STORAGE_KEY = "cc.demo.session.v1";
+
+export interface DemoSession {
+  professional_id?: string;
+  professional_name?: string;
+  resident_id?: string;
+  resident_first_name?: string;
+  referral_id?: string;
+  circle_id?: string;
+  activity_id?: string;
+  invitation_id?: string;
+}
+
+export function readDemoSession(): DemoSession {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? (parsed as DemoSession) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function writeDemoSession(patch: Partial<DemoSession>): DemoSession {
+  if (typeof window === "undefined") return patch as DemoSession;
+  const next = { ...readDemoSession(), ...patch };
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  return next;
+}
+
+export function resetDemoSession(): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(STORAGE_KEY);
+}
 
 // ---------- Mapbox helper ----------
 
