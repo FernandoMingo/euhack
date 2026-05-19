@@ -1,0 +1,10 @@
+fastapi
+httpx
+pydantic[email]
+uvicorn
+
+# Optional: enables the LLM-backed activity-planning service. The backend
+# imports openai lazily, so this dependency is only required when the
+# operator actually requests a plan via OpenAIChatLLMClient.
+openai
+

@@ -23,6 +23,19 @@ def seed(db_path: Path = DB_PATH) -> None:
     # Disable FKs during seed so INSERT OR REPLACE doesn't cascade-delete children
     conn.execute("PRAGMA foreign_keys = OFF")
 
+    # Demo-only near-me activity is created from browser geolocation at runtime.
+    # Remove any previous smoke-test/browser-created copy so a fresh seed does
+    # not pin check-in testing to an old machine location.
+    conn.execute("DELETE FROM attendance_events WHERE activity_id='act-demo-near-me'")
+    conn.execute("DELETE FROM circle_reveal_events WHERE activity_id='act-demo-near-me'")
+    conn.execute("DELETE FROM activity_accessibility WHERE activity_id='act-demo-near-me'")
+    conn.execute("DELETE FROM circle_members WHERE circle_id='circle-demo-near-me'")
+    conn.execute("DELETE FROM invitations WHERE id='inv-sofia-act-demo-near-me'")
+    conn.execute("DELETE FROM circles WHERE id='circle-demo-near-me'")
+    conn.execute("DELETE FROM activities WHERE id='act-demo-near-me'")
+    conn.execute("DELETE FROM venues WHERE id='venue-demo-near-me'")
+    conn.execute("DELETE FROM hosts WHERE id='host-demo-near-me'")
+
     # ── Trusted professional ────────────────────────────────────────────────
     PROF_ID = "prof-anna-001"
     conn.execute(

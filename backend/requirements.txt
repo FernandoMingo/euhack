@@ -1,4 +1,9 @@
 email-validator
 fastapi
 httpx
+pydantic[email]
 uvicorn
+
+# Optional: install `openai` to enable the LLM-backed activity-planning
+# service with OpenAIChatLLMClient. App startup and tests do not require it.
+# openai

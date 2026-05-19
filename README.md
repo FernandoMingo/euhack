@@ -8,6 +8,7 @@ Calm resident map, GP-created lightweight profile, activity matching, Circle Rev
 - No real email, payments, clinical records, or production AI.
 - No chat, inbox, feed, or people marketplace.
 - Matching ranks activity fit. Does not rank people by social value.
+- Updated friend backend adds deterministic behavioral/group matching plus optional LLM-backed activity planning for operators.
 
 ## Structure
 
@@ -17,6 +18,7 @@ backend/            ← friend backend (FastAPI + sqlite3 repos)
   app/api/routers/demo.py   ← frontend-friendly demo endpoints
   app/repositories/
   app/matching/
+  app/services/activity_planning_service.py
   sql/
   init_db.py
   seed_demo.py
@@ -46,6 +48,13 @@ python3 -m app.api
 ```
 
 Backend runs at `http://127.0.0.1:8000`.
+
+### Backend Feature Notes
+
+- Current frontend demo still uses compatibility routes in `backend/app/api/routers/demo.py`.
+- Operator APIs also expose matching workflow, proposed circles, audit events, invitation promotion, and activity plan review endpoints.
+- `OPENAI_API_KEY` is optional. Without an injected/configured LLM client, activity-planning generation returns `503` instead of blocking app startup.
+- To enable OpenAI-backed planning, install `openai`, set `OPENAI_API_KEY`, and run via `python3 -m app.api` or inject `OpenAIChatLLMClient` into `create_app(...)`.
 
 ## Frontend Setup
 
@@ -92,6 +101,8 @@ curl http://127.0.0.1:8000/api/catalog/preferences
 curl -X POST http://127.0.0.1:8000/api/demo/nearby-activity \
   -H "Content-Type: application/json" \
   -d '{"lat":51.9225,"lng":4.47917}'
+curl http://127.0.0.1:8000/api/operator/proposed-circles
+curl http://127.0.0.1:8000/api/operator/audit-events
 curl -X POST http://127.0.0.1:8000/api/activities/act-photo-walk/check-in
 curl http://127.0.0.1:8000/api/activities/act-photo-walk/circle-reveal
 ```

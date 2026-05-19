@@ -371,20 +371,44 @@ def create_nearby_activity(payload: dict, conn: Connection = Depends(get_connect
     now = _now()
     with conn:
         conn.execute(
-            """INSERT OR REPLACE INTO hosts (id, full_name, contact_email, host_type, created_at, updated_at)
-               VALUES (?,?,?,?,?,?)""",
+            """INSERT INTO hosts (id, full_name, contact_email, host_type, created_at, updated_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                   full_name=excluded.full_name,
+                   contact_email=excluded.contact_email,
+                   host_type=excluded.host_type,
+                   updated_at=excluded.updated_at""",
             (host_id, "CivicCircles demo host", "demo@civiccircles.nl", "facilitator", now, now),
         )
         conn.execute(
-            """INSERT OR REPLACE INTO venues (id, name, address, city, lat, lng, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?)""",
+            """INSERT INTO venues (id, name, address, city, lat, lng, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                   name=excluded.name,
+                   address=excluded.address,
+                   city=excluded.city,
+                   lat=excluded.lat,
+                   lng=excluded.lng,
+                   updated_at=excluded.updated_at""",
             (venue_id, "Your current starting point", "Initial geolocation point", "Amsterdam", lat, lng, now, now),
         )
         conn.execute(
-            """INSERT OR REPLACE INTO activities
+            """INSERT INTO activities
                (id, title, activity_type, venue_id, host_id, start_at, end_at,
                 capacity, cost_cents, risk_level, approval_status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                   title=excluded.title,
+                   activity_type=excluded.activity_type,
+                   venue_id=excluded.venue_id,
+                   host_id=excluded.host_id,
+                   start_at=excluded.start_at,
+                   end_at=excluded.end_at,
+                   capacity=excluded.capacity,
+                   cost_cents=excluded.cost_cents,
+                   risk_level=excluded.risk_level,
+                   approval_status=excluded.approval_status,
+                   updated_at=excluded.updated_at""",
             (
                 activity_id,
                 "Calm Check-in Test",
@@ -403,12 +427,18 @@ def create_nearby_activity(payload: dict, conn: Connection = Depends(get_connect
         )
         conn.execute(
             "INSERT OR IGNORE INTO activity_accessibility (id, activity_id, accessibility_tag) VALUES (?,?,?)",
-            (str(uuid.uuid4()), activity_id, "step_free_route"),
+            ("access-act-demo-near-me-step-free", activity_id, "step_free_route"),
         )
         conn.execute(
-            """INSERT OR REPLACE INTO circles
+            """INSERT INTO circles
                (id, activity_id, status, fit_score, shared_signals_json, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                   activity_id=excluded.activity_id,
+                   status=excluded.status,
+                   fit_score=excluded.fit_score,
+                   shared_signals_json=excluded.shared_signals_json,
+                   updated_at=excluded.updated_at""",
             (
                 circle_id,
                 activity_id,
@@ -433,9 +463,16 @@ def create_nearby_activity(payload: dict, conn: Connection = Depends(get_connect
                     (str(uuid.uuid4()), circle_id, member_id, now),
                 )
         conn.execute(
-            """INSERT OR REPLACE INTO invitations
+            """INSERT INTO invitations
                (id, circle_id, activity_id, resident_id, status, companion_pass_used, sent_at)
-               VALUES (?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                   circle_id=excluded.circle_id,
+                   activity_id=excluded.activity_id,
+                   resident_id=excluded.resident_id,
+                   status=excluded.status,
+                   companion_pass_used=excluded.companion_pass_used,
+                   sent_at=excluded.sent_at""",
             (invitation_id, circle_id, activity_id, SOFIA_ID, "sent", 0, now),
         )
 
