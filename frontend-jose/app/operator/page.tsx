@@ -1,64 +1,120 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Activity as ActivityIcon,
+  CalendarDays,
   CheckCircle2,
+  Clock,
+  Footprints,
+  MapPin,
   ShieldCheck,
   Sparkles,
   UserCheck,
   Users,
+  X,
 } from "lucide-react";
 import { Chip } from "@/components/Chip";
-import { api, type ActivityTemplate, type Professional, type Resident } from "@/lib/api";
+import {
+  api,
+  readDemoSession,
+  writeDemoSession,
+  type DemoInvitation,
+  type OperatorInbox,
+  type PendingReferral,
+  type Proposal,
+} from "@/lib/api";
 
 export default function OperatorPage() {
-  const [residents, setResidents] = useState<Resident[]>([]);
-  const [professionals, setProfessionals] = useState<Professional[]>([]);
-  const [templates, setTemplates] = useState<ActivityTemplate[]>([]);
-  const [families, setFamilies] = useState<string[]>([]);
-  const [familyFilter, setFamilyFilter] = useState<string | null>(null);
+  const [inbox, setInbox] = useState<OperatorInbox | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [justSent, setJustSent] = useState<DemoInvitation[] | null>(null);
 
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const [r, p, fams] = await Promise.all([
-          api.listResidents(),
-          api.listProfessionals(),
-          api.listTemplateFamilies(),
-        ]);
-        if (!alive) return;
-        setResidents(r);
-        setProfessionals(p);
-        setFamilies(fams);
-      } catch (err) {
-        if (alive) setError(String(err));
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      setInbox(await api.operatorInbox());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }, []);
 
   useEffect(() => {
-    let alive = true;
-    api
-      .listTemplates(familyFilter ?? undefined)
-      .then((t) => alive && setTemplates(t))
-      .catch(() => alive && setTemplates([]));
-    return () => {
-      alive = false;
-    };
-  }, [familyFilter]);
+    load();
+  }, [load]);
 
-  const approved = professionals.filter(
-    (p) => p.verification_status === "approved"
-  );
+  const consentVersion =
+    inbox?.consent_text_version ??
+    inbox?.proposals[0]?.consent_text_version ??
+    "v1.0-nl-2026-05";
+
+  async function runMatching(referral: PendingReferral) {
+    setBusy("match:" + referral.referral_id);
+    setError(null);
+    setJustSent(null);
+    try {
+      const proposal = await api.orchestrateReferral(referral.referral_id, {
+        preferred_template_code: "photography_walk",
+      });
+      writeDemoSession({
+        referral_id: referral.referral_id,
+        resident_id: referral.resident.id,
+        resident_first_name: referral.resident.first_name,
+        circle_id: proposal.circle_id,
+        activity_id: proposal.activity.id,
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function approve(proposal: Proposal) {
+    setBusy("approve:" + proposal.circle_id);
+    setError(null);
+    try {
+      const invitations = await api.approveProposal(proposal.circle_id, {
+        operator_id: "operator_demo",
+      });
+      const sofia = readDemoSession().resident_id;
+      const sofiaInvite =
+        invitations.find((i) => i && sofia && i.activity_id === proposal.activity.id) ??
+        invitations[0];
+      if (sofiaInvite) {
+        writeDemoSession({
+          invitation_id: sofiaInvite.id,
+          activity_id: sofiaInvite.activity_id,
+          circle_id: sofiaInvite.circle_id,
+        });
+      }
+      setJustSent(invitations);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function reject(proposal: Proposal) {
+    setBusy("reject:" + proposal.circle_id);
+    setError(null);
+    try {
+      await api.rejectProposal(proposal.circle_id, {
+        operator_id: "operator_demo",
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const proposals = inbox?.proposals ?? [];
+  const pending = inbox?.pending_referrals ?? [];
 
   return (
     <div className="mx-auto max-w-6xl space-y-6 px-4 py-8 sm:px-6 lg:px-8">
@@ -70,9 +126,12 @@ export default function OperatorPage() {
           AI proposes. You approve.
         </h1>
         <p className="max-w-2xl text-sm text-muted-foreground">
-          The transparent layer between matching and a public invitation.
-          Verified professionals, consented residents, the activity catalog, and
-          the audit trail.
+          The transparent layer between matching and a public invitation. Every
+          decision logs against consent text{" "}
+          <span className="rounded bg-secondary px-1 py-0.5 font-mono text-xs">
+            {consentVersion}
+          </span>
+          . AI never publishes alone.
         </p>
       </header>
 
@@ -82,217 +141,278 @@ export default function OperatorPage() {
         </div>
       )}
 
+      {justSent && justSent.length > 0 && (
+        <div className="rounded-2xl bg-[color-mix(in_oklab,var(--sage)_18%,var(--card))] p-4 text-sm">
+          <p className="font-medium">
+            Approved · {justSent.length} invitation
+            {justSent.length === 1 ? "" : "s"} dispatched.
+          </p>
+          <p className="mt-0.5 text-muted-foreground">
+            Open <span className="font-mono">/</span> to see what the first
+            resident receives.
+          </p>
+        </div>
+      )}
+
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat
           icon={<Users size={16} strokeWidth={1.8} />}
-          label="Consented residents"
-          value={loading ? "…" : String(residents.length)}
+          label="Pending referrals"
+          value={String(pending.length)}
+          tone="default"
+        />
+        <Stat
+          icon={<Sparkles size={16} strokeWidth={1.8} />}
+          label="Proposals to review"
+          value={String(proposals.length)}
           tone="sage"
         />
         <Stat
           icon={<UserCheck size={16} strokeWidth={1.8} />}
-          label="Approved professionals"
-          value={loading ? "…" : `${approved.length} / ${professionals.length}`}
+          label="Operator in the loop"
+          value="Required"
           tone="mist"
-        />
-        <Stat
-          icon={<ActivityIcon size={16} strokeWidth={1.8} />}
-          label="Activity templates"
-          value={loading ? "…" : String(templates.length)}
-          tone="peach"
         />
         <Stat
           icon={<ShieldCheck size={16} strokeWidth={1.8} />}
           label="Pilot consent text"
-          value="v1.0-nl-2026-05"
-          tone="default"
+          value={consentVersion}
+          tone="peach"
         />
       </section>
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+      {proposals.length > 0 && (
         <Panel
-          title="Professionals"
-          subtitle="Verified seats consume Vektis AGB + CIBG BIG nightly."
+          title="AI-generated proposals"
+          subtitle="Click Approve to dispatch invitations. Click Reject to send the matching engine back."
         >
-          {loading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : professionals.length === 0 ? (
-            <Empty
-              text="No professionals signed up yet."
-              hint="Use the Professional tab to add one."
-            />
-          ) : (
-            <ul className="divide-y divide-border">
-              {professionals.map((p) => (
-                <li
-                  key={p.id}
-                  className="flex flex-wrap items-center justify-between gap-2 py-3"
-                >
-                  <div>
-                    <p className="text-sm font-medium">{p.full_name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {p.qualification ?? p.role} · {p.organization ?? "—"} ·
-                      AGB {p.agb_code ?? "—"}
-                    </p>
-                  </div>
-                  <Chip
-                    tone={
-                      p.verification_status === "approved"
-                        ? "sage"
-                        : p.verification_status === "rejected"
-                          ? "peach"
-                          : "default"
-                    }
-                  >
-                    {p.verification_status}
-                  </Chip>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-
-        <Panel
-          title="Residents"
-          subtitle="Profiles created with explicit consent. No clinical data attached."
-        >
-          {loading ? (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          ) : residents.length === 0 ? (
-            <Empty
-              text="No residents yet."
-              hint="Submit a referral from the Professional tab."
-            />
-          ) : (
-            <ul className="divide-y divide-border">
-              {residents.map((r) => (
-                <li
-                  key={r.id}
-                  className="flex flex-wrap items-center justify-between gap-2 py-3"
-                >
-                  <div>
-                    <p className="text-sm font-medium">{r.first_name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {r.neighborhood ?? r.city} · group {r.preferred_group_size_min}–
-                      {r.preferred_group_size_max} · {r.social_comfort}
-                    </p>
-                  </div>
-                  <Chip
-                    tone={r.status === "active" ? "sage" : "default"}
-                  >
-                    {r.status}
-                  </Chip>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-      </div>
-
-      <Panel
-        title="Activity catalog"
-        subtitle="The candidate space for matching. Fer's vectorizer turns these into feature vectors."
-      >
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setFamilyFilter(null)}
-            className={
-              "rounded-full px-3 py-1 text-xs font-medium " +
-              (familyFilter === null
-                ? "bg-[color-mix(in_oklab,var(--sage)_45%,white)]"
-                : "border border-border bg-card text-muted-foreground")
-            }
-          >
-            All families
-          </button>
-          {families.map((f) => (
-            <button
-              key={f}
-              type="button"
-              onClick={() => setFamilyFilter(f)}
-              className={
-                "rounded-full px-3 py-1 text-xs font-medium " +
-                (familyFilter === f
-                  ? "bg-[color-mix(in_oklab,var(--sage)_45%,white)]"
-                  : "border border-border bg-card text-muted-foreground")
-              }
-            >
-              {f}
-            </button>
-          ))}
-        </div>
-        {templates.length === 0 ? (
-          <Empty
-            text="No templates yet."
-            hint="Run the seeder: python backend/scripts/seed_activity_catalog.py"
-          />
-        ) : (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {templates.slice(0, 24).map((t) => (
-              <article
-                key={t.id}
-                className="rounded-2xl border border-border bg-card p-4"
-              >
-                <p className="text-sm font-medium">{t.title}</p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {t.family} · {t.typical_duration_minutes}m · group{" "}
-                  {t.typical_group_size_min}–{t.typical_group_size_max}
-                </p>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  <Chip
-                    tone={
-                      t.typical_cost_band === "free"
-                        ? "sage"
-                        : t.typical_cost_band === "low"
-                          ? "mist"
-                          : "peach"
-                    }
-                  >
-                    {t.typical_cost_band}
-                  </Chip>
-                  <Chip>{t.social_energy}</Chip>
-                  <Chip>{t.setting}</Chip>
-                </div>
-              </article>
+          <div className="space-y-4">
+            {proposals.map((p) => (
+              <ProposalCard
+                key={p.circle_id}
+                proposal={p}
+                busy={busy}
+                onApprove={() => approve(p)}
+                onReject={() => reject(p)}
+              />
             ))}
           </div>
-        )}
-        {templates.length > 24 && (
-          <p className="mt-2 text-xs text-muted-foreground">
-            Showing 24 of {templates.length}. Use family filter to narrow.
-          </p>
+        </Panel>
+      )}
+
+      <Panel
+        title="Pending referrals"
+        subtitle="Submitted by trusted professionals. Run matching to see a proposed circle."
+      >
+        {pending.length === 0 ? (
+          <Empty
+            text="No pending referrals."
+            hint="Submit one from the Professional tab to see matching run."
+          />
+        ) : (
+          <ul className="divide-y divide-border">
+            {pending.map((r) => (
+              <li
+                key={r.referral_id}
+                className="flex flex-wrap items-start justify-between gap-3 py-3"
+              >
+                <div>
+                  <p className="text-sm font-medium">
+                    {r.resident.first_name}{" "}
+                    <span className="text-xs font-normal text-muted-foreground">
+                      · {r.resident.neighborhood ?? "Amsterdam"} · group{" "}
+                      {r.resident.preferred_group_size_min}–
+                      {r.resident.preferred_group_size_max}
+                    </span>
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Referred by {r.professional.full_name} ({r.professional.role})
+                  </p>
+                  {r.referral_reason && (
+                    <p className="mt-1 text-xs italic text-muted-foreground">
+                      "{r.referral_reason}"
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={busy === "match:" + r.referral_id}
+                  onClick={() => runMatching(r)}
+                  className="inline-flex items-center gap-2 rounded-full bg-[color-mix(in_oklab,var(--mist)_45%,white)] px-4 py-2 text-xs font-medium disabled:opacity-60"
+                >
+                  <Sparkles size={12} strokeWidth={1.8} />
+                  {busy === "match:" + r.referral_id
+                    ? "Running matching…"
+                    : "Run matching"}
+                </button>
+              </li>
+            ))}
+          </ul>
         )}
       </Panel>
 
       <section className="rounded-3xl border border-border bg-secondary/50 p-6">
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Privacy guardrails
+          Audit trail · privacy guardrails
         </p>
         <ul className="mt-3 grid grid-cols-1 gap-2 text-sm text-muted-foreground sm:grid-cols-2">
-          <li className="flex items-start gap-2">
-            <CheckCircle2 size={16} strokeWidth={1.8} className="mt-0.5" />
-            <span>No clinical data flows through the matching layer.</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <CheckCircle2 size={16} strokeWidth={1.8} className="mt-0.5" />
-            <span>Peer ratings are internal-only, never resident-visible.</span>
-          </li>
-          <li className="flex items-start gap-2">
-            <CheckCircle2 size={16} strokeWidth={1.8} className="mt-0.5" />
-            <span>
-              Every consent is versioned (text + locale + capture method).
-            </span>
-          </li>
-          <li className="flex items-start gap-2">
-            <Sparkles size={16} strokeWidth={1.8} className="mt-0.5" />
-            <span>
-              AI proposes. You approve. AI never publishes an activity alone.
-            </span>
-          </li>
+          <Bullet>
+            Every match decision logs against consent text {consentVersion}.
+          </Bullet>
+          <Bullet>
+            No clinical data flows through matching. Only the lightweight
+            social profile.
+          </Bullet>
+          <Bullet>
+            Peer ratings stay internal-only, never resident-visible.
+          </Bullet>
+          <Bullet>
+            EU AI Act: limited-risk system. Human-in-the-loop on every
+            invitation.
+          </Bullet>
         </ul>
       </section>
     </div>
+  );
+}
+
+function ProposalCard({
+  proposal,
+  busy,
+  onApprove,
+  onReject,
+}: {
+  proposal: Proposal;
+  busy: string | null;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const start = useMemo(
+    () => new Date(proposal.activity.start_at),
+    [proposal.activity.start_at]
+  );
+  const dateLabel = start.toLocaleDateString(undefined, {
+    weekday: "long",
+    day: "numeric",
+    month: "short",
+  });
+  const timeLabel = start.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  return (
+    <article className="rounded-3xl border border-border bg-card p-5 shadow-[var(--shadow-soft)]">
+      <header className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <Chip tone="sage" icon={<Sparkles size={12} strokeWidth={1.8} />}>
+            AI-generated proposal
+          </Chip>
+          <h3 className="text-[20px] font-medium leading-tight">
+            {proposal.template_title || proposal.activity.title}
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            {proposal.summary_text}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">
+            Fit score
+          </p>
+          <p className="text-lg font-medium">
+            {proposal.fit_score?.toFixed(2) ?? "—"}
+          </p>
+        </div>
+      </header>
+
+      <div className="mt-4 grid grid-cols-1 gap-2 rounded-2xl border border-border bg-secondary/40 p-4 text-sm sm:grid-cols-2">
+        <Row icon={<CalendarDays size={14} strokeWidth={1.8} />} label={dateLabel} />
+        <Row icon={<Clock size={14} strokeWidth={1.8} />} label={timeLabel} />
+        <Row
+          icon={<MapPin size={14} strokeWidth={1.8} />}
+          label={`${proposal.activity.venue.name} · ${proposal.activity.venue.city}`}
+        />
+        <Row
+          icon={<Users size={14} strokeWidth={1.8} />}
+          label={`${proposal.members.length} of ${proposal.activity.capacity} residents`}
+        />
+        {proposal.activity.host && (
+          <Row
+            icon={<UserCheck size={14} strokeWidth={1.8} />}
+            label={`Host · ${proposal.activity.host.full_name}`}
+          />
+        )}
+        <Row
+          icon={<Footprints size={14} strokeWidth={1.8} />}
+          label="Step-free route"
+        />
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Anonymous circle
+          </p>
+          <ul className="mt-2 space-y-1 text-sm">
+            {proposal.members.map((m) => (
+              <li key={m.id} className="flex items-center justify-between gap-2">
+                <span>{m.first_name}</span>
+                <span className="text-xs text-muted-foreground">
+                  group {m.preferred_group_size_min}–{m.preferred_group_size_max}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Shared signals
+          </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {proposal.shared_interests.length === 0 && (
+              <span className="text-xs italic text-muted-foreground">
+                None recorded
+              </span>
+            )}
+            {proposal.shared_interests.map((tag) => (
+              <Chip key={"i-" + tag} tone="mist">
+                {tag}
+              </Chip>
+            ))}
+            {proposal.shared_availability.map((tag) => (
+              <Chip key={"a-" + tag}>{tag}</Chip>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Consent text {proposal.consent_text_version}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-5 flex flex-wrap gap-2">
+        <button
+          type="button"
+          disabled={busy === "approve:" + proposal.circle_id}
+          onClick={onApprove}
+          className="inline-flex items-center gap-2 rounded-full bg-[color-mix(in_oklab,var(--sage)_55%,white)] px-5 py-2.5 text-sm font-medium hover:bg-[color-mix(in_oklab,var(--sage)_65%,white)] disabled:opacity-60"
+        >
+          <CheckCircle2 size={14} strokeWidth={1.8} />
+          {busy === "approve:" + proposal.circle_id
+            ? "Sending invitations…"
+            : "Approve · send invitations"}
+        </button>
+        <button
+          type="button"
+          disabled={busy === "reject:" + proposal.circle_id}
+          onClick={onReject}
+          className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-60"
+        >
+          <X size={14} strokeWidth={1.8} />
+          Reject
+        </button>
+      </div>
+    </article>
   );
 }
 
@@ -323,7 +443,7 @@ function Stat({
         {icon}
         {label}
       </div>
-      <p className="text-xl font-medium">{value}</p>
+      <p className="text-base font-medium">{value}</p>
     </div>
   );
 }
@@ -356,5 +476,27 @@ function Empty({ text, hint }: { text: string; hint?: string }) {
       <p>{text}</p>
       {hint && <p className="mt-1 text-xs italic">{hint}</p>}
     </div>
+  );
+}
+
+function Row({ icon, label }: { icon: React.ReactNode; label: string }) {
+  return (
+    <div className="flex items-center gap-2 text-muted-foreground">
+      <span aria-hidden>{icon}</span>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function Bullet({ children }: { children: React.ReactNode }) {
+  return (
+    <li className="flex items-start gap-2">
+      <CheckCircle2
+        size={16}
+        strokeWidth={1.8}
+        className="mt-0.5 shrink-0 text-muted-foreground"
+      />
+      <span>{children}</span>
+    </li>
   );
 }

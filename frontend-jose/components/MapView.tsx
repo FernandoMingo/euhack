@@ -5,55 +5,63 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { Layers, Layers3, MapPin } from "lucide-react";
 import { MAPBOX_TOKEN } from "@/lib/api";
-import type { DemoEvent } from "@/lib/demoEvents";
 
 mapboxgl.accessToken = MAPBOX_TOKEN;
 
-interface MapViewProps {
-  events: DemoEvent[];
-  selectedId: string | null;
-  onSelect: (id: string) => void;
+export interface MapMarker {
+  id: string;
+  latitude: number;
+  longitude: number;
+  title?: string;
 }
 
-export function MapView({ events, selectedId, onSelect }: MapViewProps) {
+interface MapViewProps {
+  markers: MapMarker[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+  /** Map center fallback when no markers are present. Defaults to central Amsterdam. */
+  fallbackCenter?: { lat: number; lng: number };
+  /** Zoom level when fitting to a single selected marker. */
+  zoom?: number;
+}
+
+const AMSTERDAM = { lat: 52.3702, lng: 4.8952 };
+
+export function MapView({
+  markers,
+  selectedId,
+  onSelect,
+  fallbackCenter = AMSTERDAM,
+  zoom = 13.6,
+}: MapViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<Record<string, mapboxgl.Marker>>({});
+  const onSelectRef = useRef(onSelect);
   const [mode, setMode] = useState<"2D" | "3D">("2D");
   const [available, setAvailable] = useState<boolean>(Boolean(MAPBOX_TOKEN));
+
+  useEffect(() => {
+    onSelectRef.current = onSelect;
+  }, [onSelect]);
 
   useEffect(() => {
     if (!containerRef.current || !MAPBOX_TOKEN) {
       setAvailable(false);
       return;
     }
+    const initial =
+      markers[0] ?? { latitude: fallbackCenter.lat, longitude: fallbackCenter.lng };
     const map = new mapboxgl.Map({
       container: containerRef.current,
       style: "mapbox://styles/mapbox/light-v11",
-      center: [4.4777, 51.9244],
+      center: [initial.longitude, initial.latitude],
       zoom: 12.4,
       attributionControl: false,
     });
     mapRef.current = map;
+    map.on("load", () => map.resize());
 
-    map.on("load", () => {
-      // Resize once tiles are ready so the canvas matches its container
-      // even if dimensions were uncertain when init ran.
-      map.resize();
-      for (const event of events) {
-        const el = document.createElement("div");
-        el.className = "cc-pin";
-        el.innerHTML =
-          '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 6-9 12-9 12s-9-6-9-12a9 9 0 0118 0z"/><circle cx="12" cy="10" r="2.5"/></svg>';
-        el.addEventListener("click", () => onSelect(event.id));
-        const marker = new mapboxgl.Marker({ element: el })
-          .setLngLat([event.longitude, event.latitude])
-          .addTo(map);
-        markersRef.current[event.id] = marker;
-      }
-    });
-
-    // Resize on window changes too — flex parent dimensions can change.
     const handleResize = () => map.resize();
     window.addEventListener("resize", handleResize);
 
@@ -63,48 +71,118 @@ export function MapView({ events, selectedId, onSelect }: MapViewProps) {
       mapRef.current = null;
       markersRef.current = {};
     };
+    // Init once. Marker updates handled by separate effect.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Center map on the selected event
+  // Sync markers when the prop changes
   useEffect(() => {
-    if (!selectedId || !mapRef.current) return;
-    const event = events.find((e) => e.id === selectedId);
-    if (!event) return;
-    mapRef.current.easeTo({
-      center: [event.longitude, event.latitude],
-      zoom: 13.6,
+    const map = mapRef.current;
+    if (!map) return;
+
+    const apply = () => {
+      const nextIds = new Set(markers.map((m) => m.id));
+      for (const [id, existing] of Object.entries(markersRef.current)) {
+        if (!nextIds.has(id)) {
+          existing.remove();
+          delete markersRef.current[id];
+        }
+      }
+      for (const marker of markers) {
+        if (markersRef.current[marker.id]) {
+          markersRef.current[marker.id].setLngLat([
+            marker.longitude,
+            marker.latitude,
+          ]);
+          continue;
+        }
+        const el = document.createElement("div");
+        el.className = "cc-pin";
+        el.innerHTML =
+          '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 6-9 12-9 12s-9-6-9-12a9 9 0 0118 0z"/><circle cx="12" cy="10" r="2.5"/></svg>';
+        el.addEventListener("click", () => onSelectRef.current(marker.id));
+        const mb = new mapboxgl.Marker({ element: el })
+          .setLngLat([marker.longitude, marker.latitude])
+          .addTo(map);
+        markersRef.current[marker.id] = mb;
+      }
+    };
+
+    if (map.loaded()) apply();
+    else map.once("load", apply);
+  }, [markers]);
+
+  // Center map on selected marker
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !selectedId) return;
+    const target = markers.find((m) => m.id === selectedId);
+    if (!target) return;
+    map.easeTo({
+      center: [target.longitude, target.latitude],
+      zoom,
       duration: 800,
     });
-  }, [selectedId, events]);
+  }, [selectedId, markers, zoom]);
 
   // 2D / 3D toggle
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
+    const targetZoom = Math.max(map.getZoom(), 15.5);
     map.easeTo({
       pitch: mode === "3D" ? 55 : 0,
       bearing: mode === "3D" ? -10 : 0,
+      zoom: mode === "3D" ? targetZoom : Math.min(map.getZoom(), 13),
       duration: 800,
     });
     const layerId = "cc-3d-buildings";
-    if (mode === "3D" && !map.getLayer(layerId)) {
-      map.addLayer({
-        id: layerId,
-        type: "fill-extrusion",
-        source: "composite",
-        "source-layer": "building",
-        minzoom: 12,
-        paint: {
-          "fill-extrusion-color": "#E8E2D6",
-          "fill-extrusion-height": ["get", "height"],
-          "fill-extrusion-base": ["get", "min_height"],
-          "fill-extrusion-opacity": 0.7,
-        },
-      });
-    } else if (mode === "2D" && map.getLayer(layerId)) {
-      map.removeLayer(layerId);
-    }
+    const toggleBuildings = () => {
+      if (mode === "3D" && !map.getLayer(layerId)) {
+        // Insert below symbol/label layers so street names stay readable on top.
+        const layers = map.getStyle()?.layers ?? [];
+        const labelLayerId = layers.find(
+          (l) => l.type === "symbol" && (l.layout as Record<string, unknown> | undefined)?.["text-field"]
+        )?.id;
+        map.addLayer(
+          {
+            id: layerId,
+            type: "fill-extrusion",
+            source: "composite",
+            "source-layer": "building",
+            filter: ["==", ["get", "extrude"], "true"],
+            minzoom: 15,
+            paint: {
+              "fill-extrusion-color": "#D9D2C1",
+              "fill-extrusion-height": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                15,
+                0,
+                15.05,
+                ["get", "height"],
+              ],
+              "fill-extrusion-base": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                15,
+                0,
+                15.05,
+                ["get", "min_height"],
+              ],
+              "fill-extrusion-opacity": 0.85,
+            },
+          },
+          labelLayerId
+        );
+      } else if (mode === "2D" && map.getLayer(layerId)) {
+        map.removeLayer(layerId);
+      }
+    };
+    if (map.loaded()) toggleBuildings();
+    else map.once("load", toggleBuildings);
   }, [mode]);
 
   if (!available) {

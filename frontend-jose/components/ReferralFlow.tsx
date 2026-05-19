@@ -2,7 +2,13 @@
 
 import { useState } from "react";
 import { Check, ShieldCheck } from "lucide-react";
-import { ApiError, api, type Professional, type ReferralCreateResponse } from "@/lib/api";
+import {
+  ApiError,
+  api,
+  writeDemoSession,
+  type Professional,
+  type ReferralCreateResponse,
+} from "@/lib/api";
 
 type Step = "consent" | "profile" | "submitted";
 
@@ -90,6 +96,11 @@ export function ReferralFlow({ professional }: Props) {
         referral_reason: referralReason,
       });
       setSubmitted(res);
+      writeDemoSession({
+        resident_id: res.resident.id,
+        resident_first_name: res.resident.first_name,
+        referral_id: res.referral.id,
+      });
       setStep("submitted");
     } catch (err) {
       if (err instanceof ApiError) setError(err.message);

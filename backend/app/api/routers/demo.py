@@ -1,718 +1,864 @@
 """
-Demo compatibility router — frontend-friendly endpoints for the hackathon demo.
-All endpoints are scoped to Sofia (resident id: sofia-001) for simplicity.
+Demo orchestration router.
+
+This is the thin compatibility + orchestration layer that the frontend
+calls during the recorded demo. It wraps the lower-level primitives
+(matching workflow, attendance, feedback, invitations) into the shapes
+the UI wants:
+
+  - Operator inbox: pending referrals + proposed circles awaiting decision.
+  - One-click orchestrate: run matching for a referral, materialise an
+    activity for the top-ranked template, anchor the top proposed circle
+    to that activity. Operator still needs to click Approve.
+  - Approve / reject: records operator decision, flips activity approval,
+    sends invitations.
+  - Resident inbox: invitations joined with activity + venue + host.
+  - Check-in + circle-reveal: arrival flips reveal from locked to unlocked.
+  - Reflection: thin wrap of /api/activities/{id}/feedback.
+  - GP dashboard: referrals + resident summaries.
+
+Everything here is demo-shaped. It is NOT intended as the production
+operator API surface.
 """
+
 from __future__ import annotations
 
-import json
-import uuid
-from datetime import datetime, timezone
-from pathlib import Path
+from dataclasses import dataclass
+from datetime import datetime, time, timedelta, timezone
 from sqlite3 import Connection
-from typing import Any
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 
 from app.api.deps import get_connection
+from app.repositories import (
+    ActivityRepository,
+    ActivityTemplateRepository,
+    MatchingRepository,
+    ProfessionalRepository,
+    ReferralRepository,
+    ResidentRepository,
+)
+from app.repositories.base import new_id, utc_now_iso
+from app.services import MatchingWorkflowService
 
-router = APIRouter(tags=["demo"])
-
-SOFIA_ID = "sofia-001"
-BACKEND_ROOT = Path(__file__).resolve().parents[3]
-CATALOG_PATH = BACKEND_ROOT / "data" / "activity_catalog.json"
-
-AVAILABILITY_OPTIONS = {
-    "weekday_morning": ("mon", "09:00", "12:00", "Weekday morning"),
-    "weekday_afternoon": ("mon", "13:00", "17:00", "Weekday afternoon"),
-    "weekday_evening": ("thu", "18:00", "20:30", "Weekday evening"),
-    "sat_morning": ("sat", "09:00", "13:00", "Saturday morning"),
-    "sat_afternoon": ("sat", "13:00", "17:00", "Saturday afternoon"),
-    "sun_morning": ("sun", "09:00", "12:00", "Sunday morning"),
-    "sun_afternoon": ("sun", "13:00", "17:00", "Sunday afternoon"),
-}
+router = APIRouter(prefix="/api/demo", tags=["demo"])
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+# ---------------------------------------------------------------------------
+# Response shapes (demo-specific; not promoted to schemas.py on purpose).
+# ---------------------------------------------------------------------------
 
 
-def _label(value: str) -> str:
-    cleaned = value.split(":", 1)[-1]
-    return cleaned.replace("_", " ").replace("-", " ").title()
+class _VenueOut(BaseModel):
+    id: str
+    name: str
+    address: str
+    city: str
+    lat: float | None
+    lng: float | None
 
 
-def _load_catalog() -> list[dict[str, Any]]:
-    if not CATALOG_PATH.exists():
+class _HostOut(BaseModel):
+    id: str
+    full_name: str
+    host_type: str
+
+
+class _ActivityOut(BaseModel):
+    id: str
+    title: str
+    activity_type: str
+    start_at: datetime
+    end_at: datetime
+    capacity: int
+    cost_cents: int
+    risk_level: str
+    approval_status: str
+    venue: _VenueOut
+    host: _HostOut | None
+
+
+class _ResidentSummary(BaseModel):
+    id: str
+    first_name: str
+    neighborhood: str | None
+    social_comfort: str
+    preferred_group_size_min: int
+    preferred_group_size_max: int
+
+
+class _ProfessionalSummary(BaseModel):
+    id: str
+    full_name: str
+    role: str
+    organization: str | None
+    city: str | None
+    verification_status: str
+
+
+class _PendingReferralOut(BaseModel):
+    referral_id: str
+    referral_reason: str | None
+    created_at: datetime
+    resident: _ResidentSummary
+    professional: _ProfessionalSummary
+    consent_text_version: str = "v1.0-nl-2026-05"
+
+
+class _ProposalOut(BaseModel):
+    circle_id: str
+    activity: _ActivityOut
+    template_code: str
+    template_title: str
+    fit_score: float | None
+    shared_interests: list[str]
+    shared_availability: list[str]
+    members: list[_ResidentSummary]
+    summary_text: str
+    consent_text_version: str = "v1.0-nl-2026-05"
+
+
+class _OperatorInboxOut(BaseModel):
+    pending_referrals: list[_PendingReferralOut]
+    proposals: list[_ProposalOut]
+    consent_text_version: str = "v1.0-nl-2026-05"
+
+
+class _OrchestrateRequest(BaseModel):
+    operator_id: str = Field(default="operator_demo")
+    preferred_template_code: str | None = Field(
+        default="photography_walk",
+        description=(
+            "Template code to prefer if it appears in the top-N ranking. "
+            "Keeps the recorded demo on-narrative (Vondelpark photography walk). "
+            "Set to null to use the raw ranker output."
+        ),
+    )
+
+
+class _ApproveRequest(BaseModel):
+    operator_id: str = Field(default="operator_demo")
+    reason: str | None = None
+
+
+class _InvitationOut(BaseModel):
+    id: str
+    status: str
+    activity_id: str
+    circle_id: str
+    activity: _ActivityOut
+    template_code: str | None
+    fit_score: float | None
+    members: list[_ResidentSummary]
+
+
+class _ResidentInboxOut(BaseModel):
+    resident: _ResidentSummary
+    invitations: list[_InvitationOut]
+
+
+class _CheckInRequest(BaseModel):
+    resident_id: str
+
+
+class _RevealAttendeeOut(BaseModel):
+    first_name: str
+    common_ground: list[str]
+    conversation_starter: str
+
+
+class _CircleRevealOut(BaseModel):
+    activity_id: str
+    locked: bool
+    attendees: list[_RevealAttendeeOut]
+
+
+class _ReflectionRequest(BaseModel):
+    resident_id: str
+    felt_after: Literal["worse", "same", "better"] | None = "better"
+    would_repeat: bool | None = True
+    notes: str | None = None
+
+
+class _ProfessionalDashboardOut(BaseModel):
+    professional: _ProfessionalSummary
+    referrals: list[_PendingReferralOut]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+@dataclass(slots=True)
+class _Repos:
+    conn: Connection
+    activities: ActivityRepository
+    templates: ActivityTemplateRepository
+    matching: MatchingRepository
+    professionals: ProfessionalRepository
+    referrals: ReferralRepository
+    residents: ResidentRepository
+
+
+def _repos(conn: Connection) -> _Repos:
+    return _Repos(
+        conn=conn,
+        activities=ActivityRepository(conn),
+        templates=ActivityTemplateRepository(conn),
+        matching=MatchingRepository(conn),
+        professionals=ProfessionalRepository(conn),
+        referrals=ReferralRepository(conn),
+        residents=ResidentRepository(conn),
+    )
+
+
+def _next_saturday_10_30(reference: datetime | None = None) -> datetime:
+    """Next Saturday at 10:30 local time, as an aware UTC datetime.
+
+    Used by the orchestrator to give the demo's photography walk a
+    realistic start. If today is Saturday and it's before 10:30, today
+    wins; otherwise the following Saturday.
+    """
+    now = reference or datetime.now(timezone.utc)
+    days_ahead = (5 - now.weekday()) % 7  # 5 = Saturday
+    candidate = (now + timedelta(days=days_ahead)).date()
+    saturday = datetime.combine(candidate, time(10, 30), tzinfo=timezone.utc)
+    if saturday <= now:
+        saturday = saturday + timedelta(days=7)
+    return saturday
+
+
+def _vondelpark_venue(repos: _Repos) -> object:
+    """Get-or-create the Vondelpark venue used in the demo narrative."""
+    existing = repos.conn.execute(
+        "SELECT id FROM venues WHERE name = ? AND city = ? LIMIT 1",
+        ("Vondelpark", "Amsterdam"),
+    ).fetchone()
+    if existing is not None:
+        venue = repos.activities.get_activity  # no-op to please type
+        row = repos.conn.execute(
+            "SELECT * FROM venues WHERE id = ?", (existing["id"],)
+        ).fetchone()
+        return row
+    venue = repos.activities.create_venue(
+        name="Vondelpark",
+        address="Vondelpark, 1071 AA Amsterdam",
+        city="Amsterdam",
+        lat=52.358,
+        lng=4.8686,
+    )
+    return venue
+
+
+def _demo_host(repos: _Repos) -> object:
+    existing = repos.conn.execute(
+        "SELECT * FROM hosts WHERE full_name = ? LIMIT 1",
+        ("Maya · CivicCircles host",),
+    ).fetchone()
+    if existing is not None:
+        return existing
+    return repos.activities.create_host(
+        full_name="Maya · CivicCircles host",
+        host_type="facilitator",
+        contact_email="maya@civiccircles.demo",
+    )
+
+
+def _venue_to_out(row) -> _VenueOut:
+    if hasattr(row, "id"):
+        return _VenueOut(
+            id=row.id,
+            name=row.name,
+            address=row.address,
+            city=row.city,
+            lat=row.lat,
+            lng=row.lng,
+        )
+    return _VenueOut(
+        id=row["id"],
+        name=row["name"],
+        address=row["address"],
+        city=row["city"],
+        lat=row["lat"],
+        lng=row["lng"],
+    )
+
+
+def _host_to_out(row) -> _HostOut | None:
+    if row is None:
+        return None
+    if hasattr(row, "id"):
+        return _HostOut(id=row.id, full_name=row.full_name, host_type=row.host_type)
+    return _HostOut(id=row["id"], full_name=row["full_name"], host_type=row["host_type"])
+
+
+def _activity_to_out(repos: _Repos, activity_id: str) -> _ActivityOut:
+    activity = repos.activities.get_activity(activity_id)
+    if activity is None:
+        raise HTTPException(status_code=404, detail=f"Activity {activity_id} not found")
+    venue_row = repos.conn.execute(
+        "SELECT * FROM venues WHERE id = ?", (activity.venue_id,)
+    ).fetchone()
+    host_row = None
+    if activity.host_id:
+        host_row = repos.conn.execute(
+            "SELECT * FROM hosts WHERE id = ?", (activity.host_id,)
+        ).fetchone()
+    return _ActivityOut(
+        id=activity.id,
+        title=activity.title,
+        activity_type=activity.activity_type,
+        start_at=activity.start_at,
+        end_at=activity.end_at,
+        capacity=activity.capacity,
+        cost_cents=activity.cost_cents,
+        risk_level=activity.risk_level,
+        approval_status=activity.approval_status,
+        venue=_venue_to_out(venue_row),
+        host=_host_to_out(host_row),
+    )
+
+
+def _resident_summary(repos: _Repos, resident_id: str) -> _ResidentSummary:
+    resident = repos.residents.get_resident(resident_id)
+    if resident is None:
+        raise HTTPException(status_code=404, detail=f"Resident {resident_id} not found")
+    return _ResidentSummary(
+        id=resident.id,
+        first_name=resident.first_name,
+        neighborhood=resident.neighborhood,
+        social_comfort=resident.social_comfort,
+        preferred_group_size_min=resident.preferred_group_size_min,
+        preferred_group_size_max=resident.preferred_group_size_max,
+    )
+
+
+def _professional_summary(repos: _Repos, professional_id: str) -> _ProfessionalSummary:
+    professional = repos.professionals.get_professional(professional_id)
+    if professional is None:
+        raise HTTPException(
+            status_code=404, detail=f"Professional {professional_id} not found"
+        )
+    return _ProfessionalSummary(
+        id=professional.id,
+        full_name=professional.full_name,
+        role=professional.role,
+        organization=professional.organization,
+        city=professional.city,
+        verification_status=professional.verification_status,
+    )
+
+
+def _pending_referral_out(repos: _Repos, referral_id: str) -> _PendingReferralOut:
+    referral = repos.referrals.get_referral(referral_id)
+    if referral is None:
+        raise HTTPException(status_code=404, detail=f"Referral {referral_id} not found")
+    consent_row = repos.conn.execute(
+        """
+        SELECT consent_text_version FROM consent_records
+         WHERE resident_id = ? AND professional_id = ?
+         ORDER BY granted_at DESC LIMIT 1
+        """,
+        (referral.resident_id, referral.professional_id),
+    ).fetchone()
+    return _PendingReferralOut(
+        referral_id=referral.id,
+        referral_reason=referral.referral_reason,
+        created_at=referral.created_at,
+        resident=_resident_summary(repos, referral.resident_id),
+        professional=_professional_summary(repos, referral.professional_id),
+        consent_text_version=(
+            consent_row["consent_text_version"]
+            if consent_row is not None
+            else "v1.0-nl-2026-05"
+        ),
+    )
+
+
+def _conversation_starter(template_code: str, shared_interests: list[str]) -> str:
+    if shared_interests:
+        return f"Ask about their favourite {shared_interests[0]} spot."
+    starters = {
+        "photography_walk": "Ask what they like to take photos of.",
+        "slow_park_walk": "Ask what their favourite quiet corner of the park is.",
+        "picnic_in_the_park": "Ask what they brought to share.",
+    }
+    return starters.get(template_code, "Ask what brought them today.")
+
+
+def _proposal_for_circle(repos: _Repos, circle_id: str) -> _ProposalOut:
+    circle = repos.activities.get_circle(circle_id)
+    if circle is None:
+        raise HTTPException(status_code=404, detail=f"Circle {circle_id} not found")
+    if circle.activity_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Circle is not anchored to an activity yet; "
+                "run /api/demo/operator/referrals/{id}/orchestrate first"
+            ),
+        )
+    activity_out = _activity_to_out(repos, circle.activity_id)
+
+    template_code = ""
+    template_title = ""
+    if circle.template_id:
+        row = repos.conn.execute(
+            "SELECT code, title FROM activity_templates WHERE id = ?",
+            (circle.template_id,),
+        ).fetchone()
+        if row is not None:
+            template_code = row["code"]
+            template_title = row["title"]
+
+    member_rows = repos.activities.list_circle_members(circle_id=circle_id)
+    members = [_resident_summary(repos, m.resident_id) for m in member_rows]
+
+    import json
+
+    shared = {"shared_interests": [], "shared_availability": []}
+    try:
+        parsed = json.loads(circle.shared_signals_json or "{}")
+        if isinstance(parsed, dict):
+            shared["shared_interests"] = list(parsed.get("shared_interests") or [])
+            shared["shared_availability"] = list(parsed.get("shared_availability") or [])
+    except json.JSONDecodeError:
+        pass
+
+    summary = (
+        f"AI proposes {template_title or activity_out.title} for {len(members)} residents "
+        f"on {activity_out.start_at.strftime('%A %H:%M')} at {activity_out.venue.name}."
+    )
+
+    return _ProposalOut(
+        circle_id=circle.id,
+        activity=activity_out,
+        template_code=template_code,
+        template_title=template_title,
+        fit_score=circle.fit_score,
+        shared_interests=shared["shared_interests"],
+        shared_availability=shared["shared_availability"],
+        members=members,
+        summary_text=summary,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Operator
+# ---------------------------------------------------------------------------
+
+
+@router.get("/operator/inbox", response_model=_OperatorInboxOut)
+def operator_inbox(
+    conn: Connection = Depends(get_connection),
+) -> _OperatorInboxOut:
+    repos = _repos(conn)
+
+    pending_rows = repos.conn.execute(
+        """
+        SELECT id FROM referrals
+         WHERE status = 'submitted'
+         ORDER BY created_at DESC
+         LIMIT 25
+        """
+    ).fetchall()
+    pending = [_pending_referral_out(repos, row["id"]) for row in pending_rows]
+
+    circles = repos.activities.list_circles(status="proposed", limit=25)
+    proposals: list[_ProposalOut] = []
+    for circle in circles:
+        if circle.activity_id is None:
+            continue
+        try:
+            proposals.append(_proposal_for_circle(repos, circle.id))
+        except HTTPException:
+            continue
+
+    return _OperatorInboxOut(pending_referrals=pending, proposals=proposals)
+
+
+@router.post(
+    "/operator/referrals/{referral_id}/orchestrate",
+    response_model=_ProposalOut,
+)
+def orchestrate_referral(
+    referral_id: str,
+    payload: _OrchestrateRequest | None = Body(default=None),
+    conn: Connection = Depends(get_connection),
+) -> _ProposalOut:
+    """One click: matching workflow → activity from top template → top circle anchored.
+
+    Leaves the activity in `proposed` status. Operator still has to call
+    /approve to flip it to `approved` and dispatch invitations.
+    """
+    repos = _repos(conn)
+
+    preferred = payload.preferred_template_code if payload else "photography_walk"
+    service = MatchingWorkflowService(conn)
+    try:
+        workflow = service.accept_referral_and_propose_matches(
+            referral_id=referral_id,
+            top_n_activities=10,
+            top_n_groups=3,
+            min_group_size=2,
+            max_group_size=6,
+            preferred_template_code=preferred,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if not workflow.top_activity_results:
+        raise HTTPException(
+            status_code=422,
+            detail="Matching produced no activity candidates; check the resident profile.",
+        )
+    grouping = workflow.grouping_result
+    if grouping is None or not grouping.groups:
+        raise HTTPException(
+            status_code=422,
+            detail="No proposed circles for this referral. Need more residents in the pool.",
+        )
+
+    referral = repos.referrals.get_referral(referral_id)
+    referred_resident_id = referral.resident_id if referral else None
+
+    # Prefer the top group that actually contains the referred resident.
+    # If matching put Sofia in no group (it's fair-grouping; she may have
+    # tied with others), fall back to the top group and append her below.
+    top_group = next(
+        (
+            g
+            for g in grouping.groups
+            if any(m.id == referred_resident_id for m in g.members)
+        ),
+        grouping.groups[0],
+    )
+    if top_group.circle is None:
         raise HTTPException(
             status_code=500,
-            detail=f"Activity catalog missing at {CATALOG_PATH.relative_to(BACKEND_ROOT)}",
+            detail="Matching engine did not persist the top circle.",
         )
-    data = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
-    if not isinstance(data, list):
-        raise HTTPException(status_code=500, detail="Activity catalog must be a JSON list")
-    return [item for item in data if isinstance(item, dict)]
 
+    template = grouping.template
+    venue_row = _vondelpark_venue(repos)
+    host_row = _demo_host(repos)
+    venue_id = venue_row.id if hasattr(venue_row, "id") else venue_row["id"]
+    host_id = host_row.id if hasattr(host_row, "id") else host_row["id"]
 
-def _option(value: str, label: str | None = None) -> dict[str, str]:
-    return {"value": value, "label": label or _label(value)}
+    start_at = _next_saturday_10_30()
+    end_at = start_at + timedelta(minutes=template.typical_duration_minutes)
 
-
-def _catalog_options() -> dict[str, list[dict[str, str]]]:
-    catalog = _load_catalog()
-    activity_types = sorted(
-        [_option(str(item["code"]), str(item.get("title") or _label(str(item["code"])))) for item in catalog if item.get("code")],
-        key=lambda item: item["label"],
+    activity = repos.activities.create_activity(
+        title=template.title,
+        activity_type=template.code,
+        venue_id=venue_id,
+        host_id=host_id,
+        start_at=start_at.isoformat(),
+        end_at=end_at.isoformat(),
+        capacity=template.typical_group_size_max,
+        risk_level=template.risk_level,
+        approval_status="proposed",
+        cost_cents=0,
     )
 
-    interest_values: set[str] = set()
-    access_values: set[str] = set()
-    for item in catalog:
-        family = item.get("family")
-        if family:
-            interest_values.add(str(family))
-        setting = item.get("setting")
-        if setting:
-            interest_values.add(f"setting:{setting}")
-        for tag in item.get("tags") or []:
-            tag = str(tag)
-            if tag.startswith("access:"):
-                access_values.add(tag)
-            else:
-                interest_values.add(tag)
-
-    accessibility: list[dict[str, str]] = []
-    for tag in sorted(access_values):
-        raw = tag.split(":", 1)[-1]
-        value = "step_free_route" if raw == "step_free_possible" else raw
-        accessibility.append(_option(value, "Step-Free Route" if value == "step_free_route" else None))
-
-    return {
-        "activity_types": activity_types,
-        "interests": sorted([_option(v) for v in interest_values], key=lambda item: item["label"]),
-        "accessibility_needs": accessibility,
-        "social_comfort": [
-            _option("one_on_one", "One-on-one"),
-            _option("small_group_low_pressure", "Small group, low pressure"),
-            _option("small_group", "Small group"),
-            _option("larger_group", "Larger group"),
-        ],
-        "cost_sensitivity": [
-            _option("free_or_low_cost", "Free or low cost"),
-            _option("budget", "Budget"),
-            _option("flexible", "Flexible"),
-        ],
-        "availability": [
-            _option(value, label) for value, (_, _, _, label) in AVAILABILITY_OPTIONS.items()
-        ],
-        "avoid": [
-            _option("alcohol", "Alcohol"),
-            _option("loud_venues", "Loud venues"),
-            _option("late_night", "Late night"),
-            _option("large_groups", "Large groups"),
-            _option("high_intensity", "High intensity"),
-            _option("competitive_activities", "Competitive activities"),
-        ],
-    }
-
-
-def _availability_value(weekday: str, start: str, end: str) -> str:
-    for value, (day, start_time, end_time, _) in AVAILABILITY_OPTIONS.items():
-        if (weekday, start, end) == (day, start_time, end_time):
-            return value
-    return f"{weekday}_{start}_{end}"
-
-
-def _availability_row(value: Any) -> tuple[str, str, str] | None:
-    if isinstance(value, dict):
-        try:
-            return str(value["weekday"]), str(value["start_time_local"]), str(value["end_time_local"])
-        except KeyError:
-            return None
-    if not isinstance(value, str):
-        return None
-    if value in AVAILABILITY_OPTIONS:
-        day, start, end, _ = AVAILABILITY_OPTIONS[value]
-        return day, start, end
-    parts = value.split("_")
-    if len(parts) >= 3 and parts[0] in {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}:
-        return parts[0], parts[1], parts[2]
-    return None
-
-
-def _as_list(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    if isinstance(value, tuple):
-        return list(value)
-    return [value]
-
-
-def _resident_payload(conn: Connection, resident_id: str = SOFIA_ID) -> dict[str, Any]:
-    r = conn.execute("SELECT * FROM residents WHERE id = ?", (resident_id,)).fetchone()
-    if r is None:
-        raise HTTPException(status_code=404, detail="Demo resident not seeded")
-
-    prefs = conn.execute(
-        "SELECT preference_type, value FROM resident_preferences WHERE resident_id = ?", (resident_id,)
-    ).fetchall()
-    interests = [p["value"] for p in prefs if p["preference_type"] == "interest"]
-    activity_prefs = [p["value"] for p in prefs if p["preference_type"] == "activity"]
-    accessibility = [p["value"] for p in prefs if p["preference_type"] == "accessibility_need"]
-
-    avail = conn.execute(
-        "SELECT weekday, start_time_local, end_time_local FROM resident_availability WHERE resident_id = ?",
-        (resident_id,),
-    ).fetchall()
-    availability = [
-        _availability_value(a["weekday"], a["start_time_local"], a["end_time_local"])
-        for a in avail
-    ]
-
-    avoid = [
-        row["value"]
-        for row in conn.execute(
-            "SELECT value FROM resident_avoidances WHERE resident_id = ?", (resident_id,)
-        ).fetchall()
-    ]
-
-    referral = conn.execute(
-        """
-        SELECT tp.full_name, tp.role, tp.organization
-        FROM referrals ref
-        JOIN trusted_professionals tp ON tp.id = ref.professional_id
-        WHERE ref.resident_id = ?
-        ORDER BY ref.created_at DESC LIMIT 1
-        """,
-        (resident_id,),
-    ).fetchone()
-    referred_by = referral["full_name"] if referral else None
-
-    consent_row = conn.execute(
-        "SELECT id FROM consent_records WHERE resident_id = ? AND status = 'active' LIMIT 1",
-        (resident_id,),
-    ).fetchone()
-    consent_scopes: list[str] = []
-    if consent_row:
-        scopes = conn.execute(
-            "SELECT scope FROM consent_scopes WHERE consent_id = ?", (consent_row["id"],)
-        ).fetchall()
-        consent_scopes = [s["scope"] for s in scopes]
-
-    return {
-        "id": r["id"],
-        "first_name": r["first_name"],
-        "email": r["email"],
-        "preferred_language": r["preferred_language"],
-        "city": r["city"],
-        "neighborhood": r["neighborhood"],
-        "approx_location": f"{r['neighborhood']}, {r['city']}",
-        "location_radius_km": r["location_radius_km"],
-        "social_comfort": r["social_comfort"],
-        "preferred_group_size": {"min": r["preferred_group_size_min"], "max": r["preferred_group_size_max"]},
-        "preferred_group_size_min": r["preferred_group_size_min"],
-        "preferred_group_size_max": r["preferred_group_size_max"],
-        "cost_sensitivity": r["cost_sensitivity"],
-        "status": r["status"],
-        "interests": interests,
-        "activity_preferences": activity_prefs,
-        "availability": availability,
-        "accessibility_needs": accessibility,
-        "avoid": avoid,
-        "companion_pass_allowed": False,
-        "referred_by": referred_by,
-        "consent_scopes": consent_scopes,
-        "locked_fields": ["first_name", "email", "city", "neighborhood", "referred_by", "consent_scopes"],
-    }
-
-
-def _invitation_payload(conn: Connection, row) -> dict[str, Any]:
-    acc_tags = [
-        t["accessibility_tag"]
-        for t in conn.execute(
-            "SELECT accessibility_tag FROM activity_accessibility WHERE activity_id = ?",
-            (row["act_id"],),
-        ).fetchall()
-    ]
-    try:
-        signals = json.loads(row["shared_signals_json"] or "[]")
-    except Exception:
-        signals = []
-    why_fit = "; ".join(signals) if signals else "Matched to your preferences"
-
-    try:
-        start = datetime.fromisoformat(row["start_at"])
-        date_time_label = "Demo now" if row["act_id"] == "act-demo-near-me" else start.strftime("%A %d %B · %H:%M")
-        availability_label = "Demo now" if row["act_id"] == "act-demo-near-me" else start.strftime("%A morning")
-    except Exception:
-        date_time_label = row["start_at"]
-        availability_label = ""
-
-    lat = float(row["lat"]) if row["lat"] is not None else None
-    lng = float(row["lng"]) if row["lng"] is not None else None
-    cost = "Free" if row["cost_cents"] == 0 else f"€{row['cost_cents'] / 100:.2f}"
-
-    return {
-        "id": row["id"],
-        "resident_id": SOFIA_ID,
-        "activity_id": row["act_id"],
-        "status": row["status"],
-        "companion_pass_available": not bool(row["companion_pass_used"]),
-        "activity": {
-            "id": row["act_id"],
-            "title": row["title"],
-            "activity_type": row["activity_type"],
-            "date_time_label": date_time_label,
-            "availability_label": availability_label,
-            "location": {
-                "name": row["venue_name"],
-                "address": row["address"],
-                "lat": lat,
-                "lng": lng,
-            },
-            "group_size": row["capacity"],
-            "pace": "calm",
-            "intensity": "low",
-            "host": row["host_name"] or "CivicCircles Host",
-            "cost": cost,
-            "cost_amount": row["cost_cents"],
-            "accessibility": acc_tags,
-            "alcohol_free": True,
-            "tags": signals[:4] if signals else [],
-            "status": row["approval_status"],
-            "why_fit": why_fit,
-        },
-    }
-
-
-def _invitation_row(conn: Connection, invitation_id: str):
-    return conn.execute(
-        """
-        SELECT i.id, i.status, i.companion_pass_used,
-               a.id as act_id, a.title, a.activity_type, a.start_at, a.end_at,
-               a.capacity, a.cost_cents, a.risk_level, a.approval_status,
-               v.name as venue_name, v.address, v.lat, v.lng,
-               h.full_name as host_name,
-               c.shared_signals_json
-        FROM invitations i
-        JOIN activities a ON a.id = i.activity_id
-        JOIN venues v ON v.id = a.venue_id
-        LEFT JOIN hosts h ON h.id = a.host_id
-        LEFT JOIN circles c ON c.id = i.circle_id
-        WHERE i.id = ? AND i.resident_id = ?
-        """,
-        (invitation_id, SOFIA_ID),
-    ).fetchone()
-
-
-# ── GET /api/resident/me ────────────────────────────────────────────────────
-
-@router.get("/api/resident/me")
-def get_resident_me(conn: Connection = Depends(get_connection)):
-    return _resident_payload(conn, SOFIA_ID)
-
-
-# ── GET /api/resident/invitations ─────────────────────────────────────────
-
-@router.get("/api/resident/invitations")
-def get_resident_invitations(conn: Connection = Depends(get_connection)):
-    rows = conn.execute(
-        """
-        SELECT i.id, i.status, i.companion_pass_used,
-               a.id as act_id, a.title, a.activity_type, a.start_at, a.end_at,
-               a.capacity, a.cost_cents, a.risk_level, a.approval_status,
-               v.name as venue_name, v.address, v.lat, v.lng,
-               h.full_name as host_name,
-               c.shared_signals_json
-        FROM invitations i
-        JOIN activities a ON a.id = i.activity_id
-        JOIN venues v ON v.id = a.venue_id
-        LEFT JOIN hosts h ON h.id = a.host_id
-        LEFT JOIN circles c ON c.id = i.circle_id
-        WHERE i.resident_id = ?
-          AND a.approval_status != 'rejected'
-          AND (c.status IS NULL OR c.status != 'cancelled')
-        ORDER BY a.start_at
-        """,
-        (SOFIA_ID,),
-    ).fetchall()
-
-    return [_invitation_payload(conn, row) for row in rows]
-
-
-@router.get("/api/catalog/preferences")
-def get_preference_catalog():
-    return _catalog_options()
-
-
-@router.post("/api/demo/nearby-activity")
-def create_nearby_activity(payload: dict, conn: Connection = Depends(get_connection)):
-    """Demo-only: pin one test activity to Sofia's initial geolocation."""
-    try:
-        lat = float(payload["lat"])
-        lng = float(payload["lng"])
-    except (KeyError, TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="lat and lng must be numbers")
-    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
-        raise HTTPException(status_code=400, detail="lat/lng out of range")
-
-    force = bool(payload.get("force", False))
-    activity_id = "act-demo-near-me"
-    invitation_id = "inv-sofia-act-demo-near-me"
-    circle_id = "circle-demo-near-me"
-    venue_id = "venue-demo-near-me"
-    host_id = "host-demo-near-me"
-
-    existing = _invitation_row(conn, invitation_id)
-    if existing and not force:
-        return _invitation_payload(conn, existing)
-
-    now = _now()
-    with conn:
-        conn.execute(
-            """INSERT INTO hosts (id, full_name, contact_email, host_type, created_at, updated_at)
-               VALUES (?,?,?,?,?,?)
-               ON CONFLICT(id) DO UPDATE SET
-                   full_name=excluded.full_name,
-                   contact_email=excluded.contact_email,
-                   host_type=excluded.host_type,
-                   updated_at=excluded.updated_at""",
-            (host_id, "CivicCircles demo host", "demo@civiccircles.nl", "facilitator", now, now),
-        )
-        conn.execute(
-            """INSERT INTO venues (id, name, address, city, lat, lng, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?)
-               ON CONFLICT(id) DO UPDATE SET
-                   name=excluded.name,
-                   address=excluded.address,
-                   city=excluded.city,
-                   lat=excluded.lat,
-                   lng=excluded.lng,
-                   updated_at=excluded.updated_at""",
-            (venue_id, "Your current starting point", "Initial geolocation point", "Amsterdam", lat, lng, now, now),
-        )
-        conn.execute(
-            """INSERT INTO activities
-               (id, title, activity_type, venue_id, host_id, start_at, end_at,
-                capacity, cost_cents, risk_level, approval_status, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(id) DO UPDATE SET
-                   title=excluded.title,
-                   activity_type=excluded.activity_type,
-                   venue_id=excluded.venue_id,
-                   host_id=excluded.host_id,
-                   start_at=excluded.start_at,
-                   end_at=excluded.end_at,
-                   capacity=excluded.capacity,
-                   cost_cents=excluded.cost_cents,
-                   risk_level=excluded.risk_level,
-                   approval_status=excluded.approval_status,
-                   updated_at=excluded.updated_at""",
-            (
-                activity_id,
-                "Calm Check-in Test",
-                "slow_park_walk",
-                venue_id,
-                host_id,
-                now,
-                now,
-                4,
-                0,
-                "low",
-                "approved",
-                now,
-                now,
-            ),
-        )
-        conn.execute(
-            "INSERT OR IGNORE INTO activity_accessibility (id, activity_id, accessibility_tag) VALUES (?,?,?)",
-            ("access-act-demo-near-me-step-free", activity_id, "step_free_route"),
-        )
-        conn.execute(
-            """INSERT INTO circles
-               (id, activity_id, status, fit_score, shared_signals_json, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?)
-               ON CONFLICT(id) DO UPDATE SET
-                   activity_id=excluded.activity_id,
-                   status=excluded.status,
-                   fit_score=excluded.fit_score,
-                   shared_signals_json=excluded.shared_signals_json,
-                   updated_at=excluded.updated_at""",
-            (
-                circle_id,
-                activity_id,
-                "invitations_sent",
-                0.95,
-                json.dumps([
-                    "placed at your starting location",
-                    "50m check-in test",
-                    "step-free route available",
-                    "small group comfort",
-                ]),
-                now,
-                now,
-            ),
-        )
-        member_ids = [SOFIA_ID, "member-lena-001", "member-tom-002", "member-mara-003", "member-felix-004"]
-        for member_id in member_ids:
-            resident = conn.execute("SELECT id FROM residents WHERE id=?", (member_id,)).fetchone()
-            if resident:
-                conn.execute(
-                    "INSERT OR IGNORE INTO circle_members (id, circle_id, resident_id, joined_at) VALUES (?,?,?,?)",
-                    (str(uuid.uuid4()), circle_id, member_id, now),
-                )
-        conn.execute(
-            """INSERT INTO invitations
-               (id, circle_id, activity_id, resident_id, status, companion_pass_used, sent_at)
-               VALUES (?,?,?,?,?,?,?)
-               ON CONFLICT(id) DO UPDATE SET
-                   circle_id=excluded.circle_id,
-                   activity_id=excluded.activity_id,
-                   resident_id=excluded.resident_id,
-                   status=excluded.status,
-                   companion_pass_used=excluded.companion_pass_used,
-                   sent_at=excluded.sent_at""",
-            (invitation_id, circle_id, activity_id, SOFIA_ID, "sent", 0, now),
-        )
-
-    row = _invitation_row(conn, invitation_id)
-    if row is None:
-        raise HTTPException(status_code=500, detail="Nearby invitation could not be loaded")
-    return _invitation_payload(conn, row)
-
-
-# ── POST /api/activities/{activity_id}/check-in ───────────────────────────
-
-@router.post("/api/activities/{activity_id}/check-in")
-def check_in(activity_id: str, conn: Connection = Depends(get_connection)):
-    existing = conn.execute(
-        "SELECT id FROM attendance_events WHERE activity_id = ? AND resident_id = ?",
-        (activity_id, SOFIA_ID),
-    ).fetchone()
-    now = _now()
-    if existing:
-        conn.execute(
-            "UPDATE attendance_events SET attendance_status='attended', check_in_at=? WHERE id=?",
-            (now, existing["id"]),
-        )
-    else:
-        conn.execute(
-            """INSERT INTO attendance_events (id, activity_id, resident_id, attendance_status, check_in_at)
-               VALUES (?, ?, ?, 'attended', ?)""",
-            (str(uuid.uuid4()), activity_id, SOFIA_ID, now),
-        )
-    conn.commit()
-    return {"checked_in": True, "check_in_at": now}
-
-
-# ── GET /api/activities/{activity_id}/circle-reveal ───────────────────────
-
-@router.get("/api/activities/{activity_id}/circle-reveal")
-def circle_reveal(activity_id: str, conn: Connection = Depends(get_connection)):
-    checked = conn.execute(
-        "SELECT id FROM attendance_events WHERE activity_id=? AND resident_id=? AND attendance_status='attended'",
-        (activity_id, SOFIA_ID),
-    ).fetchone()
-
-    if not checked:
-        return {"activity_id": activity_id, "locked": True, "attendees": []}
-
-    # record reveal event
-    conn.execute(
-        """INSERT INTO circle_reveal_events (id, activity_id, resident_id, revealed_at)
-           VALUES (?, ?, ?, ?)""",
-        (str(uuid.uuid4()), activity_id, SOFIA_ID, _now()),
+    repos.conn.execute(
+        "UPDATE circles SET activity_id = ?, updated_at = ? WHERE id = ?",
+        (activity.id, utc_now_iso(), top_group.circle.id),
     )
-    conn.commit()
 
-    # fetch other circle members (not Sofia)
-    members = conn.execute(
-        """
-        SELECT r.first_name
-        FROM circle_members cm
-        JOIN circles ci ON ci.id = cm.circle_id
-        JOIN residents r ON r.id = cm.resident_id
-        WHERE ci.activity_id = ? AND cm.resident_id != ?
-        LIMIT 5
-        """,
-        (activity_id, SOFIA_ID),
-    ).fetchall()
-
-    bios = [
-        "Enjoys quiet walks and local history",
-        "Photographer and coffee enthusiast",
-        "Loves calm mornings in the city",
-        "Museum visitor and sketch artist",
-        "Parks, books, and good conversations",
-    ]
-    starters = [
-        "What's a favourite quiet spot you've found in Amsterdam?",
-        "Do you have a go-to morning routine?",
-        "What made you interested in this kind of activity?",
-        "Is there a neighbourhood you'd love to explore?",
-        "What's something small that brings you joy lately?",
-    ]
-
-    attendees = []
-    for i, m in enumerate(members):
-        attendees.append({
-            "first_name": m["first_name"],
-            "short_bio": bios[i % len(bios)],
-            "conversation_starter": starters[i % len(starters)],
-        })
-
-    return {"activity_id": activity_id, "locked": False, "attendees": attendees}
-
-
-# ── POST /api/activities/{activity_id}/feedback ───────────────────────────
-
-@router.post("/api/activities/{activity_id}/feedback")
-def submit_feedback(
-    activity_id: str,
-    payload: dict,
-    conn: Connection = Depends(get_connection),
-):
-    felt_after = payload.get("felt_after")
-    would_repeat_raw = payload.get("would_repeat") or payload.get("would_do_similar_again")
-    would_repeat = 1 if str(would_repeat_raw).lower() in ("true", "yes", "1") else 0
-    notes = payload.get("notes") or payload.get("preference_adjustment")
-    activity_fit_raw = payload.get("activity_fit")
-    activity_fit = 1 if activity_fit_raw is not None and str(activity_fit_raw).lower() in ("true", "yes", "1") else None
-    group_comfort_raw = payload.get("group_comfort")
-    group_comfort = 1 if group_comfort_raw is not None and str(group_comfort_raw).lower() in ("true", "yes", "1") else None
-    safety_reported = 1 if payload.get("safety_reported") else 0
-
-    existing = conn.execute(
-        "SELECT id FROM resident_feedback WHERE activity_id=? AND resident_id=?",
-        (activity_id, SOFIA_ID),
-    ).fetchone()
-
-    now = _now()
-    if existing:
-        conn.execute(
-            """UPDATE resident_feedback
-               SET felt_after=?, would_repeat=?, notes=?, activity_fit=?, group_comfort=?, safety_reported=?
-               WHERE id=?""",
-            (felt_after, would_repeat, notes, activity_fit, group_comfort, safety_reported, existing["id"]),
-        )
-    else:
-        conn.execute(
-            """INSERT INTO resident_feedback
-               (id, activity_id, resident_id, felt_after, would_repeat, notes, activity_fit, group_comfort, safety_reported, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (str(uuid.uuid4()), activity_id, SOFIA_ID, felt_after, would_repeat, notes, activity_fit, group_comfort, safety_reported, now),
-        )
-    conn.commit()
-    return {"saved": True}
-
-
-# ── PATCH /api/residents/{resident_id}/preferences ────────────────────────
-
-LOCKED_FIELDS = {
-    "first_name",
-    "email",
-    "date_of_birth",
-    "referred_by",
-    "professional_id",
-    "city",
-    "neighborhood",
-    "consent_scopes",
-    "diagnoses",
-    "diagnosis",
-    "therapy_notes",
-    "medication_history",
-    "clinical_notes",
-}
-
-
-@router.patch("/api/residents/{resident_id}/preferences")
-def patch_preferences(
-    resident_id: str,
-    payload: dict,
-    conn: Connection = Depends(get_connection),
-):
-    raw_prefs = payload.get("preferences") if isinstance(payload.get("preferences"), dict) else payload
-    if not isinstance(raw_prefs, dict):
-        raise HTTPException(status_code=400, detail="Preference payload must be an object")
-    prefs = dict(raw_prefs)
-    for field in LOCKED_FIELDS:
-        prefs.pop(field, None)
-
-    now = _now()
-    resident = conn.execute("SELECT id FROM residents WHERE id = ?", (resident_id,)).fetchone()
-    if resident is None:
-        raise HTTPException(status_code=404, detail="Resident not found")
-
-    group = prefs.get("preferred_group_size")
-    if isinstance(group, dict):
-        if "min" in group:
-            prefs["preferred_group_size_min"] = group["min"]
-        if "max" in group:
-            prefs["preferred_group_size_max"] = group["max"]
-
-    scalar_map = {
-        "social_comfort": "social_comfort",
-        "preferred_group_size_min": "preferred_group_size_min",
-        "preferred_group_size_max": "preferred_group_size_max",
-        "cost_sensitivity": "cost_sensitivity",
-        "location_radius_km": "location_radius_km",
-    }
-
-    def replace_preferences(key: str, preference_type: str) -> None:
-        conn.execute(
-            "DELETE FROM resident_preferences WHERE resident_id=? AND preference_type=?",
-            (resident_id, preference_type),
-        )
-        for value in _as_list(prefs.get(key)):
-            if value is None or value == "":
-                continue
-            conn.execute(
-                "INSERT OR IGNORE INTO resident_preferences (id, resident_id, preference_type, value, created_at) VALUES (?,?,?,?,?)",
-                (str(uuid.uuid4()), resident_id, preference_type, str(value), now),
+    # Safety net: if the referred resident is not yet a member of the chosen
+    # circle, add her. The demo can't tell Sofia's story without Sofia in it.
+    if referred_resident_id is not None:
+        existing_member_ids = {
+            m.resident_id
+            for m in repos.activities.list_circle_members(circle_id=top_group.circle.id)
+        }
+        if referred_resident_id not in existing_member_ids:
+            repos.activities.add_circle_member(
+                circle_id=top_group.circle.id,
+                resident_id=referred_resident_id,
             )
 
+    repos.conn.commit()
+
+    return _proposal_for_circle(repos, top_group.circle.id)
+
+
+@router.post(
+    "/operator/circles/{circle_id}/approve",
+    response_model=list[_InvitationOut],
+)
+def approve_proposal(
+    circle_id: str,
+    payload: _ApproveRequest | None = Body(default=None),
+    conn: Connection = Depends(get_connection),
+) -> list[_InvitationOut]:
+    """Approve the proposal: flip activity to approved, record decision, send invitations."""
+    repos = _repos(conn)
+    operator_id = (payload.operator_id if payload else None) or "operator_demo"
+    reason = payload.reason if payload else None
+
+    circle = repos.activities.get_circle(circle_id)
+    if circle is None:
+        raise HTTPException(status_code=404, detail=f"Circle {circle_id} not found")
+    if circle.activity_id is None:
+        raise HTTPException(status_code=409, detail="Circle is not anchored to an activity")
+
+    repos.conn.execute(
+        "UPDATE activities SET approval_status = 'approved', updated_at = ? WHERE id = ?",
+        (utc_now_iso(), circle.activity_id),
+    )
+    repos.conn.commit()
+
+    service = MatchingWorkflowService(conn)
+    service.record_operator_decision(
+        activity_id=circle.activity_id,
+        operator_id=operator_id,
+        decision="approved",
+        reason=reason,
+    )
     try:
-        updates = {col: prefs[key] for key, col in scalar_map.items() if key in prefs and prefs[key] is not None}
-        if updates:
-            set_clause = ", ".join(f"{col}=?" for col in updates)
-            vals = list(updates.values()) + [now, resident_id]
-            conn.execute(f"UPDATE residents SET {set_clause}, updated_at=? WHERE id=?", vals)
+        invitations = service.send_invitations_for_approved_circle(
+            circle_id=circle_id, actor_id=operator_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-        if "interests" in prefs:
-            replace_preferences("interests", "interest")
+    out: list[_InvitationOut] = []
+    proposal = _proposal_for_circle(repos, circle_id)
+    for inv in invitations:
+        out.append(
+            _InvitationOut(
+                id=inv.id,
+                status=inv.status,
+                activity_id=inv.activity_id,
+                circle_id=inv.circle_id,
+                activity=proposal.activity,
+                template_code=proposal.template_code,
+                fit_score=proposal.fit_score,
+                members=proposal.members,
+            )
+        )
+    return out
 
-        if "activity_preferences" in prefs:
-            replace_preferences("activity_preferences", "activity")
 
-        if "accessibility_needs" in prefs:
-            replace_preferences("accessibility_needs", "accessibility_need")
+@router.post(
+    "/operator/circles/{circle_id}/reject",
+    response_model=_ProposalOut,
+)
+def reject_proposal(
+    circle_id: str,
+    payload: _ApproveRequest | None = Body(default=None),
+    conn: Connection = Depends(get_connection),
+) -> _ProposalOut:
+    repos = _repos(conn)
+    operator_id = (payload.operator_id if payload else None) or "operator_demo"
+    reason = payload.reason if payload else None
 
-        if "avoid" in prefs:
-            conn.execute("DELETE FROM resident_avoidances WHERE resident_id=?", (resident_id,))
-            for value in _as_list(prefs.get("avoid")):
-                if value is None or value == "":
-                    continue
-                conn.execute(
-                    "INSERT OR IGNORE INTO resident_avoidances (id, resident_id, value, created_at) VALUES (?,?,?,?)",
-                    (str(uuid.uuid4()), resident_id, str(value), now),
-                )
+    circle = repos.activities.get_circle(circle_id)
+    if circle is None:
+        raise HTTPException(status_code=404, detail=f"Circle {circle_id} not found")
+    if circle.activity_id is None:
+        raise HTTPException(status_code=409, detail="Circle is not anchored to an activity")
 
-        if "availability" in prefs:
-            conn.execute("DELETE FROM resident_availability WHERE resident_id=?", (resident_id,))
-            for availability in _as_list(prefs.get("availability")):
-                row = _availability_row(availability)
-                if row is None:
-                    continue
-                weekday, start_time, end_time = row
-                conn.execute(
-                    "INSERT INTO resident_availability (id, resident_id, weekday, start_time_local, end_time_local, created_at) VALUES (?,?,?,?,?,?)",
-                    (str(uuid.uuid4()), resident_id, weekday, start_time, end_time, now),
-                )
+    repos.conn.execute(
+        "UPDATE activities SET approval_status = 'rejected', updated_at = ? WHERE id = ?",
+        (utc_now_iso(), circle.activity_id),
+    )
+    repos.activities.update_circle_status(circle_id=circle_id, status="cancelled")
+    repos.conn.commit()
 
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
+    service = MatchingWorkflowService(conn)
+    service.record_operator_decision(
+        activity_id=circle.activity_id,
+        operator_id=operator_id,
+        decision="rejected",
+        reason=reason,
+    )
+    return _proposal_for_circle(repos, circle_id)
 
-    return {"saved": True, "resident_id": resident_id, "resident": _resident_payload(conn, resident_id)}
+
+# ---------------------------------------------------------------------------
+# Resident
+# ---------------------------------------------------------------------------
+
+
+@router.get("/residents/{resident_id}/inbox", response_model=_ResidentInboxOut)
+def resident_inbox(
+    resident_id: str,
+    conn: Connection = Depends(get_connection),
+) -> _ResidentInboxOut:
+    repos = _repos(conn)
+    resident = _resident_summary(repos, resident_id)
+
+    rows = repos.conn.execute(
+        """
+        SELECT id, circle_id, activity_id, status FROM invitations
+         WHERE resident_id = ?
+         ORDER BY sent_at DESC
+        """,
+        (resident_id,),
+    ).fetchall()
+
+    invitations: list[_InvitationOut] = []
+    for row in rows:
+        try:
+            proposal = _proposal_for_circle(repos, row["circle_id"])
+        except HTTPException:
+            continue
+        invitations.append(
+            _InvitationOut(
+                id=row["id"],
+                status=row["status"],
+                activity_id=row["activity_id"],
+                circle_id=row["circle_id"],
+                activity=proposal.activity,
+                template_code=proposal.template_code,
+                fit_score=proposal.fit_score,
+                members=proposal.members,
+            )
+        )
+    return _ResidentInboxOut(resident=resident, invitations=invitations)
+
+
+@router.post("/activities/{activity_id}/check-in")
+def check_in(
+    activity_id: str,
+    payload: _CheckInRequest,
+    conn: Connection = Depends(get_connection),
+) -> dict[str, object]:
+    repos = _repos(conn)
+    if repos.activities.get_activity(activity_id) is None:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    repos.activities.record_attendance(
+        activity_id=activity_id,
+        resident_id=payload.resident_id,
+        attendance_status="attended",
+        check_in_at=utc_now_iso(),
+    )
+    repos.conn.commit()
+    return {"checked_in": True, "activity_id": activity_id, "resident_id": payload.resident_id}
+
+
+@router.get(
+    "/activities/{activity_id}/circle-reveal",
+    response_model=_CircleRevealOut,
+)
+def circle_reveal(
+    activity_id: str,
+    resident_id: str = Query(...),
+    conn: Connection = Depends(get_connection),
+) -> _CircleRevealOut:
+    repos = _repos(conn)
+    if repos.activities.get_activity(activity_id) is None:
+        raise HTTPException(status_code=404, detail="Activity not found")
+
+    checked_in = repos.conn.execute(
+        """
+        SELECT 1 FROM attendance_events
+         WHERE activity_id = ? AND resident_id = ?
+           AND attendance_status = 'attended'
+           AND check_in_at IS NOT NULL
+        """,
+        (activity_id, resident_id),
+    ).fetchone()
+
+    if checked_in is None:
+        return _CircleRevealOut(activity_id=activity_id, locked=True, attendees=[])
+
+    circle_row = repos.conn.execute(
+        """
+        SELECT c.* FROM circles c
+         JOIN circle_members m ON m.circle_id = c.id
+         WHERE c.activity_id = ? AND m.resident_id = ?
+         LIMIT 1
+        """,
+        (activity_id, resident_id),
+    ).fetchone()
+    if circle_row is None:
+        return _CircleRevealOut(activity_id=activity_id, locked=False, attendees=[])
+
+    import json
+
+    shared_interests: list[str] = []
+    try:
+        parsed = json.loads(circle_row["shared_signals_json"] or "{}")
+        if isinstance(parsed, dict):
+            shared_interests = list(parsed.get("shared_interests") or [])
+    except json.JSONDecodeError:
+        pass
+
+    template_code = ""
+    if circle_row["template_id"]:
+        trow = repos.conn.execute(
+            "SELECT code FROM activity_templates WHERE id = ?",
+            (circle_row["template_id"],),
+        ).fetchone()
+        template_code = trow["code"] if trow else ""
+
+    member_rows = repos.activities.list_circle_members(circle_id=circle_row["id"])
+    attendees: list[_RevealAttendeeOut] = []
+    for member in member_rows:
+        if member.resident_id == resident_id:
+            continue
+        summary = _resident_summary(repos, member.resident_id)
+        attendees.append(
+            _RevealAttendeeOut(
+                first_name=summary.first_name,
+                common_ground=shared_interests[:3],
+                conversation_starter=_conversation_starter(template_code, shared_interests),
+            )
+        )
+
+    return _CircleRevealOut(activity_id=activity_id, locked=False, attendees=attendees)
+
+
+@router.post("/activities/{activity_id}/reflection")
+def submit_reflection(
+    activity_id: str,
+    payload: _ReflectionRequest,
+    conn: Connection = Depends(get_connection),
+) -> dict[str, object]:
+    repos = _repos(conn)
+    if repos.activities.get_activity(activity_id) is None:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    feedback = repos.activities.add_feedback(
+        activity_id=activity_id,
+        resident_id=payload.resident_id,
+        felt_after=payload.felt_after,
+        activity_fit=None,
+        group_comfort=None,
+        would_repeat=payload.would_repeat,
+        safety_reported=False,
+        notes=payload.notes,
+    )
+    repos.conn.commit()
+    return {
+        "saved": True,
+        "feedback_id": feedback.id,
+        "activity_id": activity_id,
+        "resident_id": payload.resident_id,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Professional dashboard
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/professionals/{professional_id}/dashboard",
+    response_model=_ProfessionalDashboardOut,
+)
+def professional_dashboard(
+    professional_id: str,
+    conn: Connection = Depends(get_connection),
+) -> _ProfessionalDashboardOut:
+    repos = _repos(conn)
+    professional = _professional_summary(repos, professional_id)
+    referrals = repos.referrals.list_for_professional(professional_id)
+    out_referrals = [_pending_referral_out(repos, r.id) for r in referrals]
+    return _ProfessionalDashboardOut(professional=professional, referrals=out_referrals)
