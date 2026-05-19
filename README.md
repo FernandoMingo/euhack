@@ -218,8 +218,6 @@ Everything below is the engineering view of the hackathon prototype. The product
 
 ## Scope of the prototype
 
-- No real authentication.
-- No real email, payments, clinical records, or production AI.
 - No chat, inbox-as-feed, or people marketplace.
 - Matching ranks activity fit. It does not rank people by social value.
 - The backend ships deterministic behavioral/group matching plus optional LLM-backed activity planning for operators.
