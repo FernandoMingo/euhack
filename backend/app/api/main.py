@@ -35,11 +35,6 @@ def create_app(
     llm_client: LLMClient | None = None,
 ) -> FastAPI:
     app = FastAPI(title="CivicCircles API", version="0.2.0")
-    app.state.db_path = Path(db_path)
-    app.state.llm_client = llm_client
-    if initialize_db:
-        init_db(db_path=db_path)
-
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -47,6 +42,10 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.state.db_path = Path(db_path)
+    app.state.llm_client = llm_client
+    if initialize_db:
+        init_db(db_path=db_path)
 
     app.include_router(health.router)
     app.include_router(professionals.router)
@@ -63,3 +62,7 @@ def create_app(
     app.include_router(demo.router)
 
     return app
+
+
+# Uvicorn factory alias: `uvicorn app.api.main:app --factory --reload`.
+app = create_app

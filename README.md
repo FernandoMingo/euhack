@@ -1,87 +1,116 @@
 # CivicCircles Prototype
 
-CivicCircles is an AI-powered social prescribing platform that helps cities reduce loneliness through small, low-pressure, offline activities.
-
-This repository now contains the current SQLite/FastAPI backend implementation and the frontend demo surface from `origin/main`.
+Calm resident map, GP-created lightweight profile, activity matching, Circle Reveal after check-in, reflection storage, professional dashboard, operator approval dashboard.
 
 ## Scope
 
 - No real authentication.
 - No real email, payments, clinical records, or production AI.
-- No chat, inbox, feed, public attendee browsing, or people marketplace.
-- Matching must remain explainable and must not rank people by social value.
+- No chat, inbox, feed, or people marketplace.
+- Matching ranks activity fit. Does not rank people by social value.
+- Updated friend backend adds deterministic behavioral/group matching plus optional LLM-backed activity planning for operators.
 
 ## Structure
 
 ```text
-backend/
+backend/            ← friend backend (FastAPI + sqlite3 repos)
   app/api/main.py
-  app/db.py
-  app/seed.py
-  app/matching/
+  app/api/routers/demo.py   ← frontend-friendly demo endpoints
   app/repositories/
-frontend/
+  app/matching/
+  app/services/activity_planning_service.py
+  sql/
+  init_db.py
+  seed_demo.py
+old_codex_backend/  ← original Codex SQLModel backend (archived)
+frontend/           ← Next.js TypeScript Tailwind app
   app/
-  components/
+  components/ResidentMapExperience.tsx
   lib/api.ts
 ```
 
 ## Backend Setup
 
 ```bash
-python3 -m pip install -r backend/requirements.txt
-python3 backend/init_db.py
-python3 backend/scripts/seed_activity_catalog.py
-PYTHONPATH="$(pwd)/backend" python3 -m app.api --host 127.0.0.1 --port 8000
+cd backend
+pip install -r requirements.txt
+
+# Initialise DB (creates civiccircles.db)
+python3 init_db.py
+
+# Seed demo data (Sofia + 4 activities + circles + invitations)
+python3 seed_demo.py
+
+# Run
+uvicorn app.api.main:app --factory --reload
+# or
+python3 -m app.api
 ```
 
-Backend runs at `http://127.0.0.1:8000`. If that port is occupied, use another port and set `NEXT_PUBLIC_API_BASE_URL` in `frontend/.env.local`.
+Backend runs at `http://127.0.0.1:8000`.
+
+### Backend Feature Notes
+
+- Current frontend demo still uses compatibility routes in `backend/app/api/routers/demo.py`.
+- Operator APIs also expose matching workflow, proposed circles, audit events, invitation promotion, and activity plan review endpoints.
+- `OPENAI_API_KEY` is optional. Without an injected/configured LLM client, activity-planning generation returns `503` instead of blocking app startup.
+- To enable OpenAI-backed planning, install `openai`, set `OPENAI_API_KEY`, and run via `python3 -m app.api` or inject `OpenAIChatLLMClient` into `create_app(...)`.
 
 ## Frontend Setup
 
 ```bash
 cd frontend
-cp .env.example .env.local
 npm install
 npm run dev
 ```
 
-Frontend runs at `http://localhost:3000`.
+Environment variables (optional — create `frontend/.env.local`):
 
-`NEXT_PUBLIC_MAPBOX_TOKEN` is optional. If omitted, the resident screen uses the built-in static fallback map. If present, Mapbox renders the map and the 2D/3D toggle changes pitch and bearing.
+```
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_MAPBOX_TOKEN=pk....
+```
+
+Frontend runs at `http://localhost:3000`.
 
 ## Demo Flow
 
 1. Open `http://localhost:3000`.
-2. Sofia sees the Calm Photography Walk on the map.
-3. Open the invitation card.
-4. Accept the invitation.
-5. Simulate arrival.
-6. Circle Reveal unlocks limited attendee cards.
-7. Open Reflection and save Sofia’s post-event reflection.
-8. Open `/professional` to edit Sofia’s lightweight preferences.
-9. Open `/operator` to review the anonymous graph, ranking, audit checklist, and approve/reject the proposal.
+2. Sofia sees multiple activity markers on the Amsterdam map.
+3. Tap a pin → invitation card opens.
+4. **Join** — accept the invitation.
+5. Allow browser location. The demo creates one **Calm Check-in Test** activity at Sofia's initial location.
+6. **Check in** unlocks when Sofia is within 50m.
+7. Circle Reveal shows limited attendee cards (first name + icebreaker).
+8. Open Reflection and save Sofia's post-event feedback.
+9. Open `/professional` to view/edit Sofia's preferences.
+10. Open `/operator` to review the separate operator dashboard.
+11. Click the **Profile** icon (top-right or nav tab) to edit preferences directly.
 
-Resident and operator surfaces are intentionally separate:
+## Activity Catalog Preferences
 
-- Resident view: `http://localhost:3000`
-- Operator view: `http://localhost:3000/operator`
-
-## Seeded Demo Data
-
-- Resident: Sofia, referred by GP Dr. Anna Vermeer.
-- Main activity: Calm Photography Walk, Saturday 10:30, Vondelpark.
-- Circle: Sofia plus Resident A-D.
-- Compatibility signals: Saturday morning, calm outdoor preference, photography/parks overlap, small group comfort, step-free route, alcohol-free preference.
+Profile preference choices are finite options loaded from `backend/data/activity_catalog.json`.
+If the friend backend catalog changes, copy the updated file into that path before seeding/running.
 
 ## API Smoke Checks
 
 ```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:8000/templates
+curl http://127.0.0.1:8000/api/resident/me
+curl http://127.0.0.1:8000/api/resident/invitations
+curl http://127.0.0.1:8000/api/catalog/preferences
+curl -X POST http://127.0.0.1:8000/api/demo/nearby-activity \
+  -H "Content-Type: application/json" \
+  -d '{"lat":51.9225,"lng":4.47917}'
+curl http://127.0.0.1:8000/api/operator/proposed-circles
+curl http://127.0.0.1:8000/api/operator/audit-events
+curl -X POST http://127.0.0.1:8000/api/activities/act-photo-walk/check-in
+curl http://127.0.0.1:8000/api/activities/act-photo-walk/circle-reveal
 ```
 
-## Documentation
+## Seeded Demo Data
 
-- Backend data layer docs: `backend/README.md`
-- Product specification: `civiccircles_project_spec.md`
+- **Resident**: Sofia (`sofia-001`) — Oud-West, Amsterdam.
+- **Professional**: Dr. Anna Vermeer, GP, Oud-West Health Center.
+- **Activities**: Calm Photography Walk (Vondelpark), Quiet Museum Morning (Rijksmuseum), Evening Board Games (OBA), Slow Coffee & Sketching (Café De Wester).
+- **Circle members**: Lena, Tom, Mara, Felix.
+- All activities visible on map with distinct coordinates.
