@@ -8,6 +8,7 @@ from app.api.routers import (
     professionals,
     referrals,
     residents,
+    slidedeck,
     templates,
 )
 
@@ -21,5 +22,6 @@ __all__ = [
     "professionals",
     "referrals",
     "residents",
+    "slidedeck",
     "templates",
 ]

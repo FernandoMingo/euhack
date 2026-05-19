@@ -24,6 +24,7 @@ from app.api.routers import (
     professionals,
     referrals,
     residents,
+    slidedeck,
     templates,
 )
 from app.db import DEFAULT_DB_PATH, init_db
@@ -67,6 +68,7 @@ def create_app(
     app.include_router(operator.router)
     app.include_router(demo.router)
     app.include_router(email_actions.router)
+    app.include_router(slidedeck.router)
 
     return app
 
