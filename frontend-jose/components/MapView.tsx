@@ -129,27 +129,54 @@ export function MapView({
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
+    const targetZoom = Math.max(map.getZoom(), 15.5);
     map.easeTo({
       pitch: mode === "3D" ? 55 : 0,
       bearing: mode === "3D" ? -10 : 0,
+      zoom: mode === "3D" ? targetZoom : Math.min(map.getZoom(), 13),
       duration: 800,
     });
     const layerId = "cc-3d-buildings";
     const toggleBuildings = () => {
       if (mode === "3D" && !map.getLayer(layerId)) {
-        map.addLayer({
-          id: layerId,
-          type: "fill-extrusion",
-          source: "composite",
-          "source-layer": "building",
-          minzoom: 12,
-          paint: {
-            "fill-extrusion-color": "#E8E2D6",
-            "fill-extrusion-height": ["get", "height"],
-            "fill-extrusion-base": ["get", "min_height"],
-            "fill-extrusion-opacity": 0.7,
+        // Insert below symbol/label layers so street names stay readable on top.
+        const layers = map.getStyle()?.layers ?? [];
+        const labelLayerId = layers.find(
+          (l) => l.type === "symbol" && (l.layout as Record<string, unknown> | undefined)?.["text-field"]
+        )?.id;
+        map.addLayer(
+          {
+            id: layerId,
+            type: "fill-extrusion",
+            source: "composite",
+            "source-layer": "building",
+            filter: ["==", ["get", "extrude"], "true"],
+            minzoom: 15,
+            paint: {
+              "fill-extrusion-color": "#D9D2C1",
+              "fill-extrusion-height": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                15,
+                0,
+                15.05,
+                ["get", "height"],
+              ],
+              "fill-extrusion-base": [
+                "interpolate",
+                ["linear"],
+                ["zoom"],
+                15,
+                0,
+                15.05,
+                ["get", "min_height"],
+              ],
+              "fill-extrusion-opacity": 0.85,
+            },
           },
-        });
+          labelLayerId
+        );
       } else if (mode === "2D" && map.getLayer(layerId)) {
         map.removeLayer(layerId);
       }
