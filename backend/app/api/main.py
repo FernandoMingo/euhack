@@ -26,6 +26,7 @@ from app.api.routers import (
     residents,
     templates,
 )
+from app.auto_seed import ensure_demo_companions
 from app.db import DEFAULT_DB_PATH, init_db
 from app.services.email_client import EmailClient
 from app.services.llm_client import LLMClient
@@ -51,6 +52,9 @@ def create_app(
     app.state.email_client = email_client
     if initialize_db:
         init_db(db_path=db_path)
+        # Companion pool + activity templates the matcher needs in order to
+        # produce a circle for any newly-referred resident. Cheap on rerun.
+        ensure_demo_companions(db_path=db_path)
 
     app.include_router(health.router)
     app.include_router(professionals.router)

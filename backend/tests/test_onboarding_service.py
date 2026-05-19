@@ -105,24 +105,30 @@ class OnboardingServiceTests(unittest.TestCase):
         finally:
             conn.close()
 
-    def test_signup_rejects_duplicate_email(self) -> None:
+    def test_signup_reuses_existing_professional_by_email(self) -> None:
+        """Re-submitting the GP form with a known email returns the existing
+        professional + their latest verification instead of erroring. Makes
+        the demo flow idempotent so a returning GP doesn't hit a 409."""
         service, conn = self._new_service()
         try:
-            service.signup_professional(
+            first = service.signup_professional(
                 full_name="A",
                 role="huisarts",
                 email="dup@example.com",
                 agb_code="01010001",
                 big_number="12345678",
             )
-            with self.assertRaises(ValueError):
-                service.signup_professional(
-                    full_name="B",
-                    role="huisarts",
-                    email="dup@example.com",
-                    agb_code="01010002",
-                    big_number="12345678",
-                )
+            second = service.signup_professional(
+                full_name="B",  # body differs; reuse takes precedence over body
+                role="huisarts",
+                email="dup@example.com",
+                agb_code="01010002",
+                big_number="12345678",
+            )
+            self.assertEqual(second.professional.id, first.professional.id)
+            self.assertEqual(second.professional.email, "dup@example.com")
+            # Latest verification record is returned, not a fresh one.
+            self.assertEqual(second.verification.id, first.verification.id)
         finally:
             conn.close()
 

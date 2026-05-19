@@ -159,13 +159,28 @@ class OnboardingService:
         city: str | None = None,
         qualification_hint: str | None = None,
     ) -> ProfessionalSignupResult:
-        existing = self.professionals.get_professional_by_email(email)
+        # If the GP already has an account (matched by email or AGB), reuse
+        # them so the demo can re-submit the same form without hitting the
+        # UNIQUE constraint. We return their most recent verification record
+        # so callers see the same shape as a fresh signup.
+        existing = self.professionals.get_professional_by_email(
+            email
+        ) or self.professionals.get_professional_by_agb(agb_code)
         if existing is not None:
-            raise ValueError(f"Professional with email {email!r} already exists")
-        if self.professionals.get_professional_by_agb(agb_code) is not None:
-            raise ValueError(f"Professional with AGB code {agb_code!r} already exists")
+            verifications = self.professionals.list_verifications(
+                professional_id=existing.id
+            )
+            if verifications:
+                # list_verifications returns oldest-first; take the latest.
+                latest = verifications[-1]
+                return ProfessionalSignupResult(
+                    professional=existing, verification=latest
+                )
+            # Edge case: professional row exists but no verification row.
+            # Fall through to the normal create-and-verify path which will
+            # attach a verification to the existing professional.
 
-        professional = self.professionals.create_professional(
+        professional = existing or self.professionals.create_professional(
             full_name=full_name,
             role=role,
             email=email,
@@ -239,50 +254,67 @@ class OnboardingService:
             raise ValueError("Referral requires at least one consent scope")
 
         try:
-            resident = self.residents.create_resident(
-                first_name=profile.first_name,
-                email=profile.email,
-                preferred_language=profile.preferred_language,
-                city=profile.city,
-                social_comfort=profile.social_comfort,
-                preferred_group_size_min=profile.preferred_group_size_min,
-                preferred_group_size_max=profile.preferred_group_size_max,
-                cost_sensitivity=profile.cost_sensitivity,
-                neighborhood=profile.neighborhood,
-                location_radius_km=profile.location_radius_km,
-            )
-            seen_tags: set[str] = set()
-            for interest in profile.interests:
-                for tag in _expand_interest_to_tags(interest):
-                    if tag in seen_tags:
-                        continue
-                    seen_tags.add(tag)
+            # If the resident already exists (matched by email), reuse them.
+            # This keeps the demo idempotent: the GP can re-submit the same
+            # email and we attach a fresh consent + referral to the existing
+            # profile instead of erroring on the UNIQUE constraint.
+            existing_resident = self.residents.get_resident_by_email(profile.email)
+            if existing_resident is None:
+                resident = self.residents.create_resident(
+                    first_name=profile.first_name,
+                    email=profile.email,
+                    preferred_language=profile.preferred_language,
+                    city=profile.city,
+                    social_comfort=profile.social_comfort,
+                    preferred_group_size_min=profile.preferred_group_size_min,
+                    preferred_group_size_max=profile.preferred_group_size_max,
+                    cost_sensitivity=profile.cost_sensitivity,
+                    neighborhood=profile.neighborhood,
+                    location_radius_km=profile.location_radius_km,
+                )
+                seen_tags: set[str] = set()
+                for interest in profile.interests:
+                    for tag in _expand_interest_to_tags(interest):
+                        if tag in seen_tags:
+                            continue
+                        seen_tags.add(tag)
+                        self.residents.add_preference(
+                            resident_id=resident.id,
+                            preference_type="interest",
+                            value=tag,
+                        )
+                for activity in profile.activities:
                     self.residents.add_preference(
                         resident_id=resident.id,
-                        preference_type="interest",
-                        value=tag,
+                        preference_type="activity",
+                        value=activity,
                     )
-            for activity in profile.activities:
-                self.residents.add_preference(
-                    resident_id=resident.id,
-                    preference_type="activity",
-                    value=activity,
-                )
-            for need in profile.accessibility_needs:
-                self.residents.add_preference(
-                    resident_id=resident.id,
-                    preference_type="accessibility_need",
-                    value=need,
-                )
-            for weekday, start, end in profile.availability:
-                self.residents.add_availability(
-                    resident_id=resident.id,
-                    weekday=weekday,
-                    start_time_local=start,
-                    end_time_local=end,
-                )
-            for avoid in profile.avoidances:
-                self.residents.add_avoidance(resident_id=resident.id, value=avoid)
+                for need in profile.accessibility_needs:
+                    self.residents.add_preference(
+                        resident_id=resident.id,
+                        preference_type="accessibility_need",
+                        value=need,
+                    )
+                # If the GP didn't capture availability windows in the form,
+                # fall back to Saturday + Sunday mornings so the matcher
+                # still has a soft-overlap signal to work with. Real flows
+                # collect this explicitly; this is a no-ops when the GP did
+                # pass windows.
+                availability_windows = list(profile.availability) or [
+                    ("sat", "09:00", "13:00"),
+                    ("sun", "09:00", "13:00"),
+                ]
+                for weekday, start, end in availability_windows:
+                    self.residents.add_availability(
+                        resident_id=resident.id,
+                        weekday=weekday,
+                        start_time_local=start,
+                        end_time_local=end,
+                    )
+                for avoid in profile.avoidances:
+                    self.residents.add_avoidance(resident_id=resident.id, value=avoid)
+            else:
+                resident = existing_resident
 
             consent = self.consents.create_consent(
                 resident_id=resident.id,
