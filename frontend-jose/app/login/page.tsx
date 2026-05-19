@@ -83,7 +83,7 @@ export default function ResidentLoginPage() {
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="sofia@example.nl"
+                placeholder="civiccirclenl+sofia@gmail.com"
                 className="w-full rounded-lg border border-border bg-background py-2 pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               />
             </div>
