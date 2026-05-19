@@ -68,6 +68,16 @@ def get_invitation(
     return _row_to_invitation_response(row)
 
 
+def _assert_owner(row, declared_resident_id: str | None) -> None:
+    if declared_resident_id is None:
+        return
+    if row["resident_id"] != declared_resident_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This invitation does not belong to the signed-in resident.",
+        )
+
+
 @router.post("/{invitation_id}/accept", response_model=schemas.InvitationResponse)
 def accept_invitation(
     invitation_id: str,
@@ -77,6 +87,7 @@ def accept_invitation(
     row = _fetch_invitation(conn, invitation_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invitation not found")
+    _assert_owner(row, payload.resident_id if payload else None)
     repo = ActivityRepository(conn)
     repo.update_invitation_status(
         invitation_id=invitation_id,
@@ -90,11 +101,13 @@ def accept_invitation(
 @router.post("/{invitation_id}/decline", response_model=schemas.InvitationResponse)
 def decline_invitation(
     invitation_id: str,
+    payload: schemas.InvitationDecisionRequest | None = None,
     conn: Connection = Depends(get_connection),
 ) -> schemas.InvitationResponse:
     row = _fetch_invitation(conn, invitation_id)
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invitation not found")
+    _assert_owner(row, payload.resident_id if payload else None)
     ActivityRepository(conn).update_invitation_status(
         invitation_id=invitation_id,
         status="declined",

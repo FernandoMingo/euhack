@@ -37,6 +37,49 @@ from app.repositories import (
     ReferralRepository,
     ResidentRepository,
 )
+# Friendly resident-facing interest labels → taxonomy tags the matching
+# engine recognises (theme:/attribute:/access:/format:). Any value that
+# already contains ``:`` is treated as a pre-mapped tag and passed through.
+_INTEREST_TAXONOMY: dict[str, tuple[str, ...]] = {
+    "walks": ("theme:outdoor", "attribute:calm"),
+    "walking": ("theme:outdoor", "attribute:calm"),
+    "photography": ("theme:urban", "attribute:creative", "attribute:expressive"),
+    "parks": ("theme:outdoor", "theme:nature"),
+    "coffee": ("attribute:calm", "access:quiet_space"),
+    "museums": ("theme:cultural", "attribute:cultural"),
+    "museum": ("theme:cultural", "attribute:cultural"),
+    "board games": ("attribute:calm", "format:meetup"),
+    "boardgames": ("attribute:calm", "format:meetup"),
+    "gardening": ("theme:nature", "attribute:creative"),
+    "cooking": ("attribute:creative", "format:hands_on"),
+    "library events": ("theme:cultural", "access:quiet_space", "attribute:reflective"),
+    "library": ("theme:cultural", "access:quiet_space"),
+    "volunteering": ("attribute:expressive", "format:meetup"),
+    "nature": ("theme:nature", "theme:outdoor"),
+    "sketching": ("attribute:creative", "attribute:reflective"),
+    "reading": ("access:quiet_space", "attribute:reflective"),
+}
+
+
+def _expand_interest_to_tags(raw: str) -> tuple[str, ...]:
+    """Map a friendly resident-facing interest label to one or more taxonomy tags.
+
+    If the input already contains ``:`` it is treated as pre-mapped and
+    returned verbatim. Unknown labels fall back to ``interest:<slug>`` so
+    they are stored in a recognised namespace (the engine treats those as
+    weak signals via shared-token matching).
+    """
+    value = (raw or "").strip().lower()
+    if not value:
+        return ()
+    if ":" in value:
+        return (value,)
+    mapped = _INTEREST_TAXONOMY.get(value)
+    if mapped:
+        return mapped
+    return (f"interest:{value.replace(' ', '_')}",)
+
+
 from app.services.verification_service import (
     StubVerificationService,
     VerificationFailure,
@@ -208,12 +251,17 @@ class OnboardingService:
                 neighborhood=profile.neighborhood,
                 location_radius_km=profile.location_radius_km,
             )
+            seen_tags: set[str] = set()
             for interest in profile.interests:
-                self.residents.add_preference(
-                    resident_id=resident.id,
-                    preference_type="interest",
-                    value=interest,
-                )
+                for tag in _expand_interest_to_tags(interest):
+                    if tag in seen_tags:
+                        continue
+                    seen_tags.add(tag)
+                    self.residents.add_preference(
+                        resident_id=resident.id,
+                        preference_type="interest",
+                        value=tag,
+                    )
             for activity in profile.activities:
                 self.residents.add_preference(
                     resident_id=resident.id,

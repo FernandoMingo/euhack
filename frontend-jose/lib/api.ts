@@ -252,6 +252,11 @@ export const api = {
   getResident: (id: string) => request<Resident>(`/api/residents/${id}`),
   listResidentConsents: (id: string) =>
     request<ConsentRecord[]>(`/api/residents/${id}/consents`),
+  loginResident: (email: string) =>
+    request<Resident>("/api/residents/login", {
+      method: "POST",
+      json: { email },
+    }),
 
   // Templates
   listTemplates: (family?: string) =>
@@ -298,15 +303,27 @@ export const api = {
       "/api/invitations",
       { method: "POST", json: body }
     ),
-  acceptInvitation: (id: string, companion_pass_used = false) =>
+  acceptInvitation: (
+    id: string,
+    opts?: { companion_pass_used?: boolean; resident_id?: string }
+  ) =>
     request<{ id: string; status: string; companion_pass_used: boolean }>(
       `/api/invitations/${id}/accept`,
-      { method: "POST", json: { companion_pass_used } }
+      {
+        method: "POST",
+        json: {
+          companion_pass_used: opts?.companion_pass_used ?? false,
+          resident_id: opts?.resident_id,
+        },
+      }
     ),
-  declineInvitation: (id: string) =>
+  declineInvitation: (id: string, opts?: { resident_id?: string }) =>
     request<{ id: string; status: string }>(
       `/api/invitations/${id}/decline`,
-      { method: "POST" }
+      {
+        method: "POST",
+        json: { resident_id: opts?.resident_id },
+      }
     ),
 
   // Consents
@@ -355,7 +372,31 @@ export const api = {
       json: body ?? {},
     }),
   residentInbox: (residentId: string) =>
-    request<ResidentInbox>(`/api/demo/residents/${residentId}/inbox`),
+    request<ResidentInbox>(
+      `/api/demo/residents/${residentId}/invitations`
+    ),
+  createNearbyActivities: (
+    residentId: string,
+    body: { lat: number; lng: number; count?: number }
+  ) =>
+    request<ResidentInbox>(
+      `/api/demo/residents/${residentId}/nearby-activities`,
+      { method: "POST", json: body }
+    ),
+  residentInboxItems: (residentId: string) =>
+    request<ResidentInboxItem[]>(
+      `/api/demo/residents/${residentId}/inbox`
+    ),
+  markInboxItemRead: (residentId: string, itemId: string) =>
+    request<ResidentInboxItem>(
+      `/api/residents/${residentId}/inbox/${itemId}/read`,
+      { method: "POST" }
+    ),
+  archiveInboxItem: (residentId: string, itemId: string) =>
+    request<ResidentInboxItem>(
+      `/api/residents/${residentId}/inbox/${itemId}/archive`,
+      { method: "POST" }
+    ),
   checkIn: (activityId: string, residentId: string) =>
     request<{ checked_in: boolean; activity_id: string; resident_id: string }>(
       `/api/demo/activities/${activityId}/check-in`,
@@ -475,6 +516,33 @@ export interface DemoInvitation {
 export interface ResidentInbox {
   resident: ResidentSummary;
   invitations: DemoInvitation[];
+}
+
+export type InboxItemStatus = "unread" | "read" | "archived";
+
+export interface ResidentInboxItem {
+  id: string;
+  resident_id: string;
+  invitation_id: string | null;
+  activity_id: string | null;
+  circle_id: string | null;
+  item_type: "activity_invitation";
+  title: string;
+  body: string;
+  status: InboxItemStatus;
+  metadata: {
+    activity_title?: string;
+    activity_start_at?: string;
+    activity_end_at?: string;
+    venue_name?: string;
+    venue_address?: string;
+    venue_city?: string;
+    [key: string]: unknown;
+  };
+  created_at: string;
+  updated_at: string;
+  read_at: string | null;
+  archived_at: string | null;
 }
 
 export interface RevealAttendee {

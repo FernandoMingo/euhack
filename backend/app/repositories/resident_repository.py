@@ -77,6 +77,34 @@ class ResidentRepository(RepositoryBase):
             withdrawn_at=parse_dt(row["withdrawn_at"]),
         )
 
+    def get_resident_by_email(self, email: str) -> Resident | None:
+        normalized = (email or "").strip().lower()
+        if not normalized:
+            return None
+        row = self.fetchone(
+            "SELECT * FROM residents WHERE LOWER(email) = ? LIMIT 1",
+            (normalized,),
+        )
+        if row is None:
+            return None
+        return Resident(
+            id=row["id"],
+            first_name=row["first_name"],
+            email=row["email"],
+            preferred_language=row["preferred_language"],
+            city=row["city"],
+            neighborhood=row["neighborhood"],
+            location_radius_km=row["location_radius_km"],
+            social_comfort=row["social_comfort"],
+            preferred_group_size_min=row["preferred_group_size_min"],
+            preferred_group_size_max=row["preferred_group_size_max"],
+            cost_sensitivity=row["cost_sensitivity"],
+            status=row["status"],
+            created_at=parse_dt(row["created_at"]),  # type: ignore[arg-type]
+            updated_at=parse_dt(row["updated_at"]),  # type: ignore[arg-type]
+            withdrawn_at=parse_dt(row["withdrawn_at"]),
+        )
+
     def list_residents(self, *, status: ResidentStatus | None = None) -> list[Resident]:
         if status is None:
             rows = self.fetchall("SELECT * FROM residents ORDER BY created_at DESC")

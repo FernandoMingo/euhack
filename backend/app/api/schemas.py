@@ -356,6 +356,7 @@ class InvitationCreateRequest(BaseModel):
 
 class InvitationDecisionRequest(BaseModel):
     companion_pass_used: bool = False
+    resident_id: str | None = None  # caller asserts ownership; backend verifies
 
 
 class InvitationResponse(BaseModel):

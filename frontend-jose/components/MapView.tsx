@@ -23,6 +23,10 @@ interface MapViewProps {
   fallbackCenter?: { lat: number; lng: number };
   /** Zoom level when fitting to a single selected marker. */
   zoom?: number;
+  /** Fired once the browser hands us a live position. */
+  onUserLocation?: (loc: { lat: number; lng: number }) => void;
+  /** When true, the geolocate control auto-triggers on load. Defaults to true. */
+  autoLocate?: boolean;
 }
 
 const AMSTERDAM = { lat: 52.3702, lng: 4.8952 };
@@ -33,17 +37,25 @@ export function MapView({
   onSelect,
   fallbackCenter = AMSTERDAM,
   zoom = 13.6,
+  onUserLocation,
+  autoLocate = true,
 }: MapViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<Record<string, mapboxgl.Marker>>({});
   const onSelectRef = useRef(onSelect);
+  const onUserLocationRef = useRef(onUserLocation);
+  const geolocateRef = useRef<mapboxgl.GeolocateControl | null>(null);
   const [mode, setMode] = useState<"2D" | "3D">("2D");
   const [available, setAvailable] = useState<boolean>(Boolean(MAPBOX_TOKEN));
 
   useEffect(() => {
     onSelectRef.current = onSelect;
   }, [onSelect]);
+
+  useEffect(() => {
+    onUserLocationRef.current = onUserLocation;
+  }, [onUserLocation]);
 
   useEffect(() => {
     if (!containerRef.current || !MAPBOX_TOKEN) {
@@ -54,13 +66,60 @@ export function MapView({
       markers[0] ?? { latitude: fallbackCenter.lat, longitude: fallbackCenter.lng };
     const map = new mapboxgl.Map({
       container: containerRef.current,
-      style: "mapbox://styles/mapbox/light-v11",
+      // Mapbox Standard exposes 3D building geometry as a first-class basemap
+      // config (`show3dObjects`). It works reliably across mapbox-gl v3.x
+      // without the source-loading race that the classic `composite/building`
+      // fill-extrusion layer pattern hits on light-v11.
+      style: "mapbox://styles/mapbox/standard",
       center: [initial.longitude, initial.latitude],
       zoom: 12.4,
       attributionControl: false,
     });
     mapRef.current = map;
-    map.on("load", () => map.resize());
+
+    // Live user location — a pulsing blue dot with a heading arrow. The
+    // control also keeps the dot synced if the resident moves while the
+    // map is open. Auto-trigger means the permission prompt fires as
+    // soon as the page mounts.
+    const geolocate = new mapboxgl.GeolocateControl({
+      positionOptions: { enableHighAccuracy: true, timeout: 8000 },
+      trackUserLocation: true,
+      showUserHeading: true,
+      showUserLocation: true,
+      showAccuracyCircle: true,
+    });
+    map.addControl(geolocate, "top-right");
+    geolocateRef.current = geolocate;
+    geolocate.on("geolocate", (e: GeolocationPosition) => {
+      const loc = { lat: e.coords.latitude, lng: e.coords.longitude };
+      onUserLocationRef.current?.(loc);
+    });
+
+    map.on("style.load", () => {
+      // Calm, light basemap to match the rest of the UI; 3D objects stay
+      // hidden until the user toggles to 3D mode.
+      try {
+        map.setConfigProperty("basemap", "lightPreset", "day");
+        map.setConfigProperty("basemap", "showPointOfInterestLabels", false);
+        map.setConfigProperty("basemap", "show3dObjects", false);
+      } catch {
+        // setConfigProperty is only available on the Standard style. If the
+        // active style changes later this is harmless to skip.
+      }
+    });
+    map.on("load", () => {
+      map.resize();
+      if (autoLocate) {
+        // Slight delay so the control's DOM button is mounted before we trigger it.
+        setTimeout(() => {
+          try {
+            geolocateRef.current?.trigger();
+          } catch {
+            /* user-gesture-only browsers will surface a button instead */
+          }
+        }, 250);
+      }
+    });
 
     const handleResize = () => map.resize();
     window.addEventListener("resize", handleResize);
@@ -125,64 +184,31 @@ export function MapView({
     });
   }, [selectedId, markers, zoom]);
 
-  // 2D / 3D toggle
+  // 2D / 3D toggle — drives Mapbox Standard's built-in 3D buildings via
+  // `show3dObjects`. The pitch + zoom change makes the depth readable.
   useEffect(() => {
     const map = mapRef.current;
     if (!map) return;
-    const targetZoom = Math.max(map.getZoom(), 15.5);
+    const targetZoom = Math.max(map.getZoom(), 16);
     map.easeTo({
-      pitch: mode === "3D" ? 55 : 0,
-      bearing: mode === "3D" ? -10 : 0,
+      pitch: mode === "3D" ? 60 : 0,
+      bearing: mode === "3D" ? -17 : 0,
       zoom: mode === "3D" ? targetZoom : Math.min(map.getZoom(), 13),
       duration: 800,
     });
-    const layerId = "cc-3d-buildings";
-    const toggleBuildings = () => {
-      if (mode === "3D" && !map.getLayer(layerId)) {
-        // Insert below symbol/label layers so street names stay readable on top.
-        const layers = map.getStyle()?.layers ?? [];
-        const labelLayerId = layers.find(
-          (l) => l.type === "symbol" && (l.layout as Record<string, unknown> | undefined)?.["text-field"]
-        )?.id;
-        map.addLayer(
-          {
-            id: layerId,
-            type: "fill-extrusion",
-            source: "composite",
-            "source-layer": "building",
-            filter: ["==", ["get", "extrude"], "true"],
-            minzoom: 15,
-            paint: {
-              "fill-extrusion-color": "#D9D2C1",
-              "fill-extrusion-height": [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                15,
-                0,
-                15.05,
-                ["get", "height"],
-              ],
-              "fill-extrusion-base": [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                15,
-                0,
-                15.05,
-                ["get", "min_height"],
-              ],
-              "fill-extrusion-opacity": 0.85,
-            },
-          },
-          labelLayerId
+    const apply3dConfig = () => {
+      try {
+        map.setConfigProperty(
+          "basemap",
+          "show3dObjects",
+          mode === "3D"
         );
-      } else if (mode === "2D" && map.getLayer(layerId)) {
-        map.removeLayer(layerId);
+      } catch {
+        // Standard-style only API. Active style swap would surface here.
       }
     };
-    if (map.loaded()) toggleBuildings();
-    else map.once("load", toggleBuildings);
+    if (map.isStyleLoaded()) apply3dConfig();
+    else map.once("style.load", apply3dConfig);
   }, [mode]);
 
   if (!available) {

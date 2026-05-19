@@ -44,12 +44,20 @@ class EmailConfigurationError(RuntimeError):
 
 @dataclass(slots=True, frozen=True)
 class EmailMessagePayload:
-    """The exact content that an `EmailClient` will be asked to deliver."""
+    """The exact content that an `EmailClient` will be asked to deliver.
+
+    ``body`` is the canonical plain-text version persisted on the
+    ``outbound_email_messages`` row. ``html_body``, when present, is
+    attached as a ``multipart/alternative`` HTML part so well-behaved
+    clients render the styled version while plain-text-only clients
+    still receive readable copy.
+    """
 
     to_email: str
     subject: str
     body: str
     resident_id: str
+    html_body: str | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -179,6 +187,8 @@ class ResendEmailClient:
             "subject": message.subject,
             "text": message.body,
         }
+        if message.html_body:
+            payload["html"] = message.html_body
         try:
             if self._http_client is not None:
                 response = self._http_client.post(url, headers=headers, json=payload)
@@ -330,6 +340,8 @@ class SMTPEmailClient:
         mime["To"] = message.to_email
         mime["Subject"] = message.subject
         mime.set_content(message.body)
+        if message.html_body:
+            mime.add_alternative(message.html_body, subtype="html")
 
         try:
             smtp = self._open_smtp()

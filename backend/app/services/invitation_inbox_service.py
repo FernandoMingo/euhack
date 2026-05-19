@@ -15,8 +15,10 @@ synchronous: it does its work inside the caller's transaction so
 
 from __future__ import annotations
 
+import html as _html
 import json
 import logging
+import os
 from dataclasses import dataclass
 from sqlite3 import Connection
 
@@ -51,6 +53,50 @@ class InvitationInboxArtifacts:
 
     inbox_item: ResidentInboxItem
     email_message: OutboundEmailMessage
+
+
+_DEFAULT_APP_BASE_URL = "http://127.0.0.1:3001"
+_DEFAULT_API_BASE_URL = "http://127.0.0.1:8000"
+
+
+def _app_base_url() -> str:
+    """Return the canonical user-facing app URL (no trailing slash).
+
+    Configured via the ``APP_BASE_URL`` env var. Falls back to the local
+    Next.js dev server. Used to build the "View activity in the app" link
+    in invitation emails.
+    """
+    return (os.environ.get("APP_BASE_URL") or _DEFAULT_APP_BASE_URL).rstrip("/")
+
+
+def _api_base_url() -> str:
+    """Return the canonical backend URL (no trailing slash).
+
+    Configured via the ``API_BASE_URL`` env var. Falls back to the local
+    FastAPI dev server. Used to build the Accept / Decline click links
+    in invitation emails (those live on the backend so a single GET can
+    flip the status server-side).
+    """
+    return (os.environ.get("API_BASE_URL") or _DEFAULT_API_BASE_URL).rstrip("/")
+
+
+@dataclass(slots=True, frozen=True)
+class _ActionUrls:
+    accept: str
+    decline: str
+    bring_companion: str
+    view_activity: str
+
+
+def _build_action_urls(*, invitation_id: str, activity_id: str) -> _ActionUrls:
+    api = _api_base_url()
+    app = _app_base_url()
+    return _ActionUrls(
+        accept=f"{api}/r/invitations/{invitation_id}/accept",
+        decline=f"{api}/r/invitations/{invitation_id}/decline",
+        bring_companion=f"{api}/r/invitations/{invitation_id}/accept-with-companion",
+        view_activity=f"{app}/inbox?activity_id={activity_id}",
+    )
 
 
 _WEEKDAY_NAMES = {
@@ -131,16 +177,32 @@ class InvitationInboxService:
         )
 
         subject = self._build_email_subject(activity)
+        urls = _build_action_urls(
+            invitation_id=invitation.id, activity_id=invitation.activity_id
+        )
+        member_count = len(
+            self.activities.list_circle_members(circle_id=invitation.circle_id)
+        )
         email_body = self._build_email_body(
             resident=resident,
             activity=activity,
             venue=venue,
+            urls=urls,
+            member_count=member_count,
+        )
+        email_html = self._build_email_html(
+            resident=resident,
+            activity=activity,
+            venue=venue,
+            urls=urls,
+            member_count=member_count,
         )
         payload = EmailMessagePayload(
             to_email=resident.email,
             subject=subject,
             body=email_body,
             resident_id=resident.id,
+            html_body=email_html,
         )
 
         try:
@@ -267,7 +329,10 @@ class InvitationInboxService:
     def _build_when_phrase(self, activity: Activity) -> str:
         start = activity.start_at
         weekday = _WEEKDAY_NAMES.get(start.weekday(), "")
-        day_part = f"{weekday}, {start.strftime('%B %-d')}".strip(", ")
+        try:
+            day_part = f"{weekday}, {start.strftime('%B %-d')}".strip(", ")
+        except ValueError:  # Windows: %-d unsupported
+            day_part = f"{weekday}, {start.strftime('%B %d').replace(' 0', ' ')}".strip(", ")
         try:
             time_part = start.strftime("%-H:%M")
         except ValueError:  # pragma: no cover - platform fallback
@@ -306,7 +371,26 @@ class InvitationInboxService:
         return "\n".join(lines)
 
     def _build_email_subject(self, activity: Activity) -> str:
-        return f"A gentle invitation to {activity.title}"
+        return f"You’re invited: {activity.title}"
+
+    def _resident_greeting_name(self, resident: Resident) -> str:
+        name = (resident.first_name or "").strip()
+        return name or "there"
+
+    def _format_location(self, venue: Venue | None) -> str | None:
+        if venue is None:
+            return None
+        parts = [venue.name]
+        if venue.address:
+            parts.append(venue.address)
+        elif venue.city:
+            parts.append(venue.city)
+        return ", ".join(p for p in parts if p)
+
+    def _format_people_count(self, member_count: int) -> str:
+        if member_count <= 1:
+            return "A small circle is forming"
+        return f"{member_count} people in this circle"
 
     def _build_email_body(
         self,
@@ -314,39 +398,164 @@ class InvitationInboxService:
         resident: Resident,
         activity: Activity,
         venue: Venue | None,
+        urls: _ActionUrls,
+        member_count: int,
     ) -> str:
-        when_phrase = self._build_when_phrase(activity)
-        venue_phrase = (
-            f"at {venue.name}, {venue.address}" if venue is not None else ""
-        )
+        """Plain-text invitation email fallback.
+
+        The HTML alternative carries the same content; keep this readable
+        in clients that strip HTML (and in providers' preview panes).
+        """
+        greeting = self._resident_greeting_name(resident)
+        location = self._format_location(venue)
+        people = self._format_people_count(member_count)
         lines = [
-            f"Hi {resident.first_name},",
+            f"Hi {greeting},",
             "",
-            (
-                f"We'd love to invite you to a small, low-key gathering: "
-                f"{activity.title}."
-            ),
-            f"When: {when_phrase}",
+            "You are invited to an activity:",
+            "",
+            activity.title,
         ]
-        if venue_phrase:
-            lines.append(f"Where: {venue_phrase}")
+        if location:
+            lines.extend(["", f"Where: {location}"])
+        lines.extend(["", f"Who: {people}"])
         lines.extend(
             [
                 "",
-                (
-                    "No commitment needed right now. Take your time, and only "
-                    "say yes if it feels comfortable."
-                ),
-                (
-                    "You can also reply in your CivicCircles inbox whenever "
-                    "you're ready."
-                ),
+                "This activity was selected for you by CivicCircles.",
+                "",
+                f"Yes, count me in: {urls.accept}",
+                f"Not this time: {urls.decline}",
+                f"Bring someone I trust: {urls.bring_companion}",
+                "",
+                f"View activity in the app: {urls.view_activity}",
                 "",
                 "Warmly,",
                 "The CivicCircles team",
             ]
         )
         return "\n".join(lines)
+
+    def _build_email_html(
+        self,
+        *,
+        resident: Resident,
+        activity: Activity,
+        venue: Venue | None,
+        urls: _ActionUrls,
+        member_count: int,
+    ) -> str:
+        """Calm, minimal HTML email (inline styles + tables for client compat)."""
+        greeting = _html.escape(self._resident_greeting_name(resident))
+        title = _html.escape(activity.title)
+        accept = _html.escape(urls.accept, quote=True)
+        decline = _html.escape(urls.decline, quote=True)
+        companion = _html.escape(urls.bring_companion, quote=True)
+        view = _html.escape(urls.view_activity, quote=True)
+        location_text = self._format_location(venue)
+        location_row = ""
+        if location_text:
+            location_row = f"""
+            <tr>
+              <td style="padding:0 32px 6px 32px;font-size:14px;line-height:1.6;color:#4a564a;">
+                <span style="color:#7d8a7d;text-transform:uppercase;letter-spacing:0.06em;font-size:11px;">Where</span><br />
+                {_html.escape(location_text)}
+              </td>
+            </tr>"""
+        people_text = _html.escape(self._format_people_count(member_count))
+        return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>You're invited</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f7f5f1;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;color:#2f3a2f;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f7f5f1;">
+      <tr>
+        <td align="center" style="padding:32px 16px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:540px;background:#ffffff;border-radius:18px;border:1px solid #e4e0d8;box-shadow:0 2px 8px rgba(60,55,40,0.04);">
+            <tr>
+              <td style="padding:32px 32px 8px 32px;font-size:13px;letter-spacing:0.08em;text-transform:uppercase;color:#7d8a7d;">
+                CivicCircles
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 32px 8px 32px;font-size:17px;line-height:1.5;color:#2f3a2f;">
+                Hi {greeting},
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:8px 32px 4px 32px;font-size:15px;line-height:1.6;color:#4a564a;">
+                You are invited to an activity:
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:4px 32px 14px 32px;font-size:22px;line-height:1.35;font-weight:500;color:#2f3a2f;">
+                {title}
+              </td>
+            </tr>{location_row}
+            <tr>
+              <td style="padding:0 32px 18px 32px;font-size:14px;line-height:1.6;color:#4a564a;">
+                <span style="color:#7d8a7d;text-transform:uppercase;letter-spacing:0.06em;font-size:11px;">Who</span><br />
+                {people_text}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 32px 20px 32px;font-size:14px;line-height:1.6;color:#6b7a6b;">
+                This activity was selected for you by CivicCircles. There's no
+                pressure — only say yes if it feels right.
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 32px 8px 32px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                  <tr>
+                    <td style="padding-bottom:10px;">
+                      <a href="{accept}"
+                         style="display:inline-block;padding:12px 22px;border-radius:999px;background:#cfe3c8;color:#1e3a1e;font-size:15px;font-weight:500;text-decoration:none;border:1px solid #a8c8a0;">
+                        Yes, count me in
+                      </a>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding-bottom:10px;">
+                      <a href="{companion}"
+                         style="display:inline-block;padding:12px 22px;border-radius:999px;background:#e4ecf5;color:#23415e;font-size:15px;font-weight:500;text-decoration:none;border:1px solid #b8cbe0;">
+                        Bring someone I trust
+                      </a>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>
+                      <a href="{decline}"
+                         style="display:inline-block;padding:12px 22px;border-radius:999px;background:#f3efe6;color:#5b6258;font-size:15px;font-weight:500;text-decoration:none;border:1px solid #ddd6c6;">
+                        Not this time
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 32px 32px 32px;font-size:14px;line-height:1.6;">
+                <a href="{view}" style="color:#3e6b3e;text-decoration:underline;">
+                  View activity in the app
+                </a>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:0 32px 24px 32px;font-size:12px;color:#9aa39a;line-height:1.5;border-top:1px solid #efece4;padding-top:18px;">
+                Sent with care by CivicCircles. You can withdraw at any time.
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
 
     def _build_metadata(
         self,

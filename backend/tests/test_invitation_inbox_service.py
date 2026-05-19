@@ -170,20 +170,46 @@ class InvitationInboxServiceTests(unittest.TestCase):
                 {"resident0@inbox.example.nl", "resident1@inbox.example.nl"},
             )
             for message in fake.sent_messages:
+                # New invitation structure: subject announces the activity;
+                # body has greeting + activity + location + people count +
+                # selection rationale + three click URLs + view-in-app.
                 self.assertIn("Photography Walk", message.subject)
-                lower = message.body.lower() + " " + message.subject.lower()
-                self.assertTrue(
-                    any(
-                        phrase in lower
-                        for phrase in (
-                            "no pressure",
-                            "no commitment",
-                            "low-key",
-                            "gentle",
-                        )
-                    ),
-                    msg=f"email copy should read as relaxed: {message.body!r}",
+                self.assertIn("You", message.subject)  # "You're invited: ..."
+                self.assertIn("You are invited to an activity", message.body)
+                self.assertIn("selected for you by CivicCircles", message.body)
+                self.assertIn("Photography Walk", message.body)
+                # Location must appear (venue name) and the people count.
+                self.assertIn("Where:", message.body)
+                self.assertIn("Community Room", message.body)
+                self.assertIn("Who:", message.body)
+                # All three CTA URLs.
+                self.assertIn(
+                    "/r/invitations/", message.body, msg="missing accept/decline links"
                 )
+                self.assertIn("Yes, count me in:", message.body)
+                self.assertIn("Not this time:", message.body)
+                self.assertIn("Bring someone I trust:", message.body)
+                self.assertIn("accept-with-companion", message.body)
+                self.assertIn(
+                    "view activity in the app",
+                    message.body.lower(),
+                    msg="plain-text email must include the in-app link line",
+                )
+                # No emojis in either the plain-text or HTML body.
+                for forbidden in ("✅", "❌", "💚"):
+                    self.assertNotIn(forbidden, message.body)
+                    if message.html_body:
+                        self.assertNotIn(forbidden, message.html_body)
+                # An HTML alternative must accompany the plain-text body
+                # and carry the new button labels.
+                self.assertIsNotNone(
+                    message.html_body, msg="invitation email should carry an HTML part"
+                )
+                assert message.html_body is not None  # for type checkers
+                self.assertIn("Yes, count me in", message.html_body)
+                self.assertIn("Bring someone I trust", message.html_body)
+                self.assertIn("Not this time", message.html_body)
+                self.assertIn("View activity in the app", message.html_body)
 
             queued_count = conn.execute(
                 "SELECT COUNT(*) FROM outbound_email_messages WHERE delivery_status = 'queued'"

@@ -3,6 +3,7 @@ from __future__ import annotations
 from sqlite3 import Connection
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, EmailStr
 
 from app.api import schemas
 from app.api.converters import (
@@ -16,6 +17,43 @@ from app.api.deps import get_connection
 from app.repositories import ConsentRepository, ResidentRepository
 
 router = APIRouter(prefix="/api/residents", tags=["residents"])
+
+
+class ResidentLoginRequest(BaseModel):
+    email: EmailStr
+
+
+@router.post(
+    "/login",
+    response_model=schemas.ResidentResponse,
+    summary="Look up a resident by their registered email (demo login)",
+)
+def login_resident(
+    payload: ResidentLoginRequest,
+    conn: Connection = Depends(get_connection),
+) -> schemas.ResidentResponse:
+    """Demo-only email-based login.
+
+    The resident is created during the GP referral flow with the email the
+    huisarts entered. We look them up by that email and return their public
+    profile. The frontend stores the returned ``id`` in localStorage and uses
+    it to scope every subsequent ``/api/.../{resident_id}/...`` call.
+
+    There is no password in the prototype. Real deployments would gate this
+    with a magic-link or DigiD step.
+    """
+    resident = ResidentRepository(conn).get_resident_by_email(payload.email)
+    if resident is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No CivicCircles account is linked to this email yet.",
+        )
+    if resident.status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This account is not active.",
+        )
+    return resident_to_response(resident)
 
 
 @router.get("", response_model=list[schemas.ResidentResponse])

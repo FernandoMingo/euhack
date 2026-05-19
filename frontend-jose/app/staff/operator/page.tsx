@@ -148,8 +148,8 @@ export default function OperatorPage() {
             {justSent.length === 1 ? "" : "s"} dispatched.
           </p>
           <p className="mt-0.5 text-muted-foreground">
-            Open <span className="font-mono">/</span> to see what the first
-            resident receives.
+            Open <span className="font-mono">/login</span> and sign in as that
+            resident to see the invitation land in their inbox.
           </p>
         </div>
       )}
@@ -207,7 +207,7 @@ export default function OperatorPage() {
         {pending.length === 0 ? (
           <Empty
             text="No pending referrals."
-            hint="Submit one from the Professional tab to see matching run."
+            hint="Submit one from /staff/professional to see matching run."
           />
         ) : (
           <ul className="divide-y divide-border">

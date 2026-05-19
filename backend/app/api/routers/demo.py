@@ -34,7 +34,14 @@ from pydantic import BaseModel, Field
 
 from app.api import schemas
 from app.api.converters import inbox_item_to_response
-from app.api.deps import get_connection
+from app.api.deps import get_connection, get_email_client, get_llm_client
+from app.services.email_client import EmailClient
+from app.services.llm_client import (
+    LLMClient,
+    LLMConfigurationError,
+    LLMResponseError,
+)
+from app.services import ActivityPlanningService
 from app.repositories import (
     ActivityRepository,
     ActivityTemplateRepository,
@@ -140,6 +147,15 @@ class _OrchestrateRequest(BaseModel):
             "Set to null to use the raw ranker output."
         ),
     )
+    use_llm: bool = Field(
+        default=True,
+        description=(
+            "When true (default), after the ranker picks the top template the "
+            "ActivityPlanningService is called so the LLM proposes the activity "
+            "title, venue, duration and safety notes. Falls back to the "
+            "template defaults if no LLM client is configured or the call fails."
+        ),
+    )
 
 
 class _ApproveRequest(BaseModel):
@@ -156,6 +172,20 @@ class _InvitationOut(BaseModel):
     template_code: str | None
     fit_score: float | None
     members: list[_ResidentSummary]
+
+
+class _ResidentInvitationsOut(BaseModel):
+    """Rich resident-scoped view used by the demo map page.
+
+    This is intentionally separate from the privacy-safe inbox at
+    ``/api/demo/residents/{id}/inbox`` (which mirrors the canonical
+    resident inbox). The map needs venue coordinates, circle members
+    and activity timing, so we re-hydrate from the underlying tables
+    for the resident who owns the invitations.
+    """
+
+    resident: _ResidentSummary
+    invitations: list[_InvitationOut]
 
 
 class _CheckInRequest(BaseModel):
@@ -487,8 +517,14 @@ def orchestrate_referral(
     referral_id: str,
     payload: _OrchestrateRequest | None = Body(default=None),
     conn: Connection = Depends(get_connection),
+    llm_client: LLMClient | None = Depends(get_llm_client),
 ) -> _ProposalOut:
     """One click: matching workflow → activity from top template → top circle anchored.
+
+    When ``use_llm`` is true and an ``LLMClient`` is configured, the activity
+    title / duration / venue are taken from a GPT-generated plan instead of
+    the template defaults. Falls back to the deterministic template path on
+    any LLM error.
 
     Leaves the activity in `proposed` status. Operator still has to call
     /approve to flip it to `approved` and dispatch invitations.
@@ -496,6 +532,7 @@ def orchestrate_referral(
     repos = _repos(conn)
 
     preferred = payload.preferred_template_code if payload else "photography_walk"
+    use_llm = payload.use_llm if payload else True
     service = MatchingWorkflowService(conn)
     try:
         workflow = service.accept_referral_and_propose_matches(
@@ -525,8 +562,8 @@ def orchestrate_referral(
     referred_resident_id = referral.resident_id if referral else None
 
     # Prefer the top group that actually contains the referred resident.
-    # If matching put Sofia in no group (it's fair-grouping; she may have
-    # tied with others), fall back to the top group and append her below.
+    # If matching put the resident in no group, fall back to the top group
+    # and append them below.
     top_group = next(
         (
             g
@@ -542,16 +579,78 @@ def orchestrate_referral(
         )
 
     template = grouping.template
-    venue_row = _vondelpark_venue(repos)
+
+    # ---- LLM activity planning (optional, falls back on any failure) ----
+    llm_title: str | None = None
+    llm_duration: int | None = None
+    llm_venue_name: str | None = None
+    llm_venue_address: str | None = None
+    llm_used = False
+    if use_llm and llm_client is not None:
+        try:
+            planner = ActivityPlanningService(conn, llm_client=llm_client)
+            plan_result = planner.generate_plan_for_circle(
+                circle_id=top_group.circle.id,
+                operator_constraints={
+                    "activity_type": f"calm small-group {template.title.lower()}",
+                    "search_area": "Amsterdam Oud-West / Vondelpark area",
+                    "budget": "free or low cost",
+                    "preferred_time_window": "Saturday morning",
+                    "venue_requirements": [
+                        "small-group friendly",
+                        "step-free, reachable by public transport",
+                        "no alcohol involved",
+                    ],
+                },
+                requested_by=(payload.operator_id if payload else "operator_demo"),
+            )
+            content = plan_result.response_content or {}
+            if isinstance(content, dict):
+                llm_title = content.get("title") or content.get("activity_title")
+                duration = content.get("duration_minutes")
+                if isinstance(duration, int) and 15 <= duration <= 480:
+                    llm_duration = duration
+                venue_research = content.get("venue_research") or {}
+                if isinstance(venue_research, dict):
+                    llm_venue_name = venue_research.get("selected_venue_name")
+                    llm_venue_address = venue_research.get("selected_venue_address")
+            llm_used = True
+        except (LLMConfigurationError, LLMResponseError, ValueError):
+            # LLM unavailable or malformed response: fall back to deterministic
+            # path silently. The plan failure is already audit-logged by the
+            # ActivityPlanningService.
+            llm_used = False
+
+    # ---- Venue: prefer LLM suggestion, else seeded Vondelpark default ----
+    if llm_venue_name and llm_venue_address:
+        existing_venue = repos.conn.execute(
+            "SELECT * FROM venues WHERE LOWER(name) = LOWER(?) LIMIT 1",
+            (llm_venue_name,),
+        ).fetchone()
+        if existing_venue is not None:
+            venue_row = existing_venue
+        else:
+            venue_row = repos.activities.create_venue(
+                name=llm_venue_name,
+                address=llm_venue_address,
+                city="Amsterdam",
+                lat=52.358,
+                lng=4.8686,
+            )
+    else:
+        venue_row = _vondelpark_venue(repos)
+
     host_row = _demo_host(repos)
     venue_id = venue_row.id if hasattr(venue_row, "id") else venue_row["id"]
     host_id = host_row.id if hasattr(host_row, "id") else host_row["id"]
 
     start_at = _next_saturday_10_30()
-    end_at = start_at + timedelta(minutes=template.typical_duration_minutes)
+    duration_minutes = llm_duration or template.typical_duration_minutes
+    end_at = start_at + timedelta(minutes=duration_minutes)
 
+    activity_title = llm_title or template.title
     activity = repos.activities.create_activity(
-        title=template.title,
+        title=activity_title,
         activity_type=template.code,
         venue_id=venue_id,
         host_id=host_id,
@@ -594,6 +693,7 @@ def approve_proposal(
     circle_id: str,
     payload: _ApproveRequest | None = Body(default=None),
     conn: Connection = Depends(get_connection),
+    email_client: EmailClient | None = Depends(get_email_client),
 ) -> list[_InvitationOut]:
     """Approve the proposal: flip activity to approved, record decision, send invitations."""
     repos = _repos(conn)
@@ -612,7 +712,7 @@ def approve_proposal(
     )
     repos.conn.commit()
 
-    service = MatchingWorkflowService(conn)
+    service = MatchingWorkflowService(conn, email_client=email_client)
     service.record_operator_decision(
         activity_id=circle.activity_id,
         operator_id=operator_id,
@@ -704,6 +804,73 @@ def resident_inbox(
         resident_id=resident_id, status=status_filter, limit=limit
     )
     return [inbox_item_to_response(item) for item in items]
+
+
+@router.get(
+    "/residents/{resident_id}/invitations",
+    response_model=_ResidentInvitationsOut,
+)
+def resident_invitations(
+    resident_id: str,
+    conn: Connection = Depends(get_connection),
+) -> _ResidentInvitationsOut:
+    """Rich, resident-scoped invitation view for the demo map page.
+
+    Returns only invitations whose ``resident_id`` matches the path param,
+    so the caller can never see other residents' invitations even if they
+    forge another id in the localStorage session.
+    """
+    repos = _repos(conn)
+    if repos.residents.get_resident(resident_id) is None:
+        raise HTTPException(status_code=404, detail="Resident not found")
+
+    rows = repos.conn.execute(
+        """
+        SELECT i.id AS invitation_id, i.status, i.activity_id, i.circle_id
+          FROM invitations i
+          JOIN activities a ON a.id = i.activity_id
+         WHERE i.resident_id = ?
+           AND a.approval_status IN ('approved', 'proposed')
+         ORDER BY a.start_at ASC
+        """,
+        (resident_id,),
+    ).fetchall()
+
+    invitations: list[_InvitationOut] = []
+    for row in rows:
+        circle = repos.activities.get_circle(row["circle_id"])
+        template_code: str | None = None
+        fit_score: float | None = None
+        members: list[_ResidentSummary] = []
+        if circle is not None:
+            fit_score = circle.fit_score
+            if circle.template_id:
+                trow = repos.conn.execute(
+                    "SELECT code FROM activity_templates WHERE id = ?",
+                    (circle.template_id,),
+                ).fetchone()
+                if trow is not None:
+                    template_code = trow["code"]
+            member_rows = repos.activities.list_circle_members(circle_id=circle.id)
+            members = [_resident_summary(repos, m.resident_id) for m in member_rows]
+
+        invitations.append(
+            _InvitationOut(
+                id=row["invitation_id"],
+                status=row["status"],
+                activity_id=row["activity_id"],
+                circle_id=row["circle_id"],
+                activity=_activity_to_out(repos, row["activity_id"]),
+                template_code=template_code,
+                fit_score=fit_score,
+                members=members,
+            )
+        )
+
+    return _ResidentInvitationsOut(
+        resident=_resident_summary(repos, resident_id),
+        invitations=invitations,
+    )
 
 
 @router.post("/activities/{activity_id}/check-in")
@@ -844,3 +1011,244 @@ def professional_dashboard(
     referrals = repos.referrals.list_for_professional(professional_id)
     out_referrals = [_pending_referral_out(repos, r.id) for r in referrals]
     return _ProfessionalDashboardOut(professional=professional, referrals=out_referrals)
+
+
+# ---------------------------------------------------------------------------
+# Nearby activity seeding (browser geolocation -> activities around the user)
+# ---------------------------------------------------------------------------
+
+
+class _NearbyActivitiesRequest(BaseModel):
+    lat: float = Field(..., description="Resident's current latitude.")
+    lng: float = Field(..., description="Resident's current longitude.")
+    count: int = Field(
+        default=4,
+        ge=1,
+        le=8,
+        description="How many nearby activities to materialise (1–8).",
+    )
+
+
+# Small lat/lng offsets in different bearings so the seeded activities sit
+# in a believable ring around the resident, not stacked on the same pin.
+# Each tuple is (dlat, dlng, label_suffix). Mid-latitude approximations:
+#   ~0.0045 deg lat  ≈ 500m
+#   ~0.0065 deg lng  ≈ 500m (at ~52°N)
+_NEARBY_OFFSETS: tuple[tuple[float, float, str], ...] = (
+    (0.0045, 0.0000, "north"),
+    (-0.0045, 0.0000, "south"),
+    (0.0000, 0.0065, "east"),
+    (0.0000, -0.0065, "west"),
+    (0.0030, 0.0045, "north-east"),
+    (-0.0030, 0.0045, "south-east"),
+    (0.0030, -0.0045, "north-west"),
+    (-0.0030, -0.0045, "south-west"),
+)
+
+
+_NEARBY_TEMPLATE_PICKS: tuple[tuple[str, str, str], ...] = (
+    ("photography_walk", "Photography Walk near you", "walk"),
+    ("slow_park_walk", "Slow Park Walk near you", "walk"),
+    ("museum_visit", "Quiet Museum Morning near you", "museum"),
+    ("coffee_meetup", "Coffee meet-up near you", "coffee"),
+    ("nature_walk_forest", "Easy Nature Walk near you", "walk"),
+    ("library_event", "Library afternoon near you", "library"),
+)
+
+
+@router.post(
+    "/residents/{resident_id}/nearby-activities",
+    response_model=_ResidentInvitationsOut,
+)
+def seed_nearby_activities(
+    resident_id: str,
+    payload: _NearbyActivitiesRequest,
+    conn: Connection = Depends(get_connection),
+    email_client: EmailClient | None = Depends(get_email_client),
+) -> _ResidentInvitationsOut:
+    """Create N activities at small offsets around the resident's coordinates.
+
+    Each activity gets its own venue (lat/lng = resident lat/lng + offset),
+    a fresh circle containing the resident + up to four existing companions
+    (any other residents in the DB), an ``invitations`` row addressed to
+    the resident, and an inbox item + outbound email via the existing
+    ``InvitationInboxService`` pipeline. Idempotent on re-call: rows for
+    a given (resident_id, offset_slug) tuple are reused.
+    """
+    from datetime import timedelta as _td
+
+    from app.dataclasses import Invitation
+    from app.repositories.base import parse_dt
+    from app.services import InvitationInboxService
+
+    repos = _repos(conn)
+    if repos.residents.get_resident(resident_id) is None:
+        raise HTTPException(status_code=404, detail="Resident not found")
+
+    # Pool of potential companions = every other active resident.
+    pool_rows = conn.execute(
+        "SELECT id FROM residents WHERE id != ? AND status='active' LIMIT 50",
+        (resident_id,),
+    ).fetchall()
+    pool_ids = [row["id"] for row in pool_rows]
+    if not pool_ids:
+        raise HTTPException(
+            status_code=422,
+            detail="No companion residents in the pool. Run seed_jose_demo.py first.",
+        )
+
+    host_row = _demo_host(repos)
+    host_id = host_row.id if hasattr(host_row, "id") else host_row["id"]
+
+    count = min(payload.count, len(_NEARBY_OFFSETS), len(_NEARBY_TEMPLATE_PICKS))
+    base_start = _next_saturday_10_30()
+
+    inbox_service = InvitationInboxService(conn, email_client=email_client)
+
+    for index in range(count):
+        dlat, dlng, suffix = _NEARBY_OFFSETS[index]
+        template_code, title_base, atype = _NEARBY_TEMPLATE_PICKS[index]
+        venue_lat = round(payload.lat + dlat, 6)
+        venue_lng = round(payload.lng + dlng, 6)
+
+        # Deterministic IDs so re-calls patch rather than duplicate.
+        slug = f"{resident_id}-{template_code}-{suffix}"
+        activity_id = f"act-near-{slug}"
+        venue_id = f"venue-near-{slug}"
+        circle_id = f"circle-near-{slug}"
+        invitation_id = f"inv-near-{slug}"
+
+        # Venue (positioned at the resident's offset)
+        conn.execute(
+            """INSERT OR REPLACE INTO venues
+               (id, name, address, city, lat, lng, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                venue_id,
+                f"{title_base} · meet point",
+                "Around you",
+                "Local",
+                venue_lat,
+                venue_lng,
+                utc_now_iso(),
+                utc_now_iso(),
+            ),
+        )
+
+        # Activity
+        start_at = base_start + timedelta(days=index)
+        end_at = start_at + timedelta(minutes=90)
+        conn.execute(
+            """INSERT OR REPLACE INTO activities
+               (id, title, activity_type, venue_id, host_id, start_at, end_at,
+                capacity, cost_cents, risk_level, approval_status, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                activity_id,
+                title_base,
+                atype,
+                venue_id,
+                host_id,
+                start_at.isoformat(),
+                end_at.isoformat(),
+                5,
+                0,
+                "low",
+                "approved",
+                utc_now_iso(),
+                utc_now_iso(),
+            ),
+        )
+
+        # Circle
+        # Look up the template id from code; fall back to None if missing.
+        trow = conn.execute(
+            "SELECT id FROM activity_templates WHERE code = ? LIMIT 1",
+            (template_code,),
+        ).fetchone()
+        template_pk = trow["id"] if trow is not None else None
+        conn.execute(
+            """INSERT OR REPLACE INTO circles
+               (id, template_id, activity_id, status, fit_score,
+                shared_signals_json, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                circle_id,
+                template_pk,
+                activity_id,
+                "invitations_sent",
+                0.86,
+                "{\"shared_interests\":[\"around you\"]}",
+                utc_now_iso(),
+                utc_now_iso(),
+            ),
+        )
+
+        # Members: resident + first 4 companions from the pool, rotating
+        # so different circles don't all look identical.
+        member_ids = [resident_id] + [
+            pool_ids[(index + i) % len(pool_ids)] for i in range(min(4, len(pool_ids)))
+        ]
+        # Ensure no duplicates from the rotation overlapping resident_id
+        seen: set[str] = set()
+        unique_members = [m for m in member_ids if not (m in seen or seen.add(m))]
+        # Wipe any prior membership of this circle so re-runs are clean.
+        conn.execute("DELETE FROM circle_members WHERE circle_id = ?", (circle_id,))
+        for mid in unique_members:
+            conn.execute(
+                """INSERT OR IGNORE INTO circle_members
+                   (id, circle_id, resident_id, joined_at) VALUES (?,?,?,?)""",
+                (new_id("circle_member"), circle_id, mid, utc_now_iso()),
+            )
+
+        # Invitation row addressed to the calling resident
+        conn.execute(
+            """INSERT OR REPLACE INTO invitations
+               (id, circle_id, activity_id, resident_id, status,
+                companion_pass_used, sent_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (
+                invitation_id,
+                circle_id,
+                activity_id,
+                resident_id,
+                "sent",
+                0,
+                utc_now_iso(),
+            ),
+        )
+
+    conn.commit()
+
+    # Backfill inbox items + outbound emails for any nearby invitation
+    # that doesn't already have one (idempotent).
+    nearby_invitations = conn.execute(
+        """
+        SELECT * FROM invitations
+         WHERE resident_id = ? AND id LIKE 'inv-near-%'
+        """,
+        (resident_id,),
+    ).fetchall()
+    for row in nearby_invitations:
+        existing = conn.execute(
+            "SELECT 1 FROM resident_inbox_items WHERE invitation_id = ?",
+            (row["id"],),
+        ).fetchone()
+        if existing:
+            continue
+        invitation_obj = Invitation(
+            id=row["id"],
+            circle_id=row["circle_id"],
+            activity_id=row["activity_id"],
+            resident_id=row["resident_id"],
+            status=row["status"],
+            companion_pass_used=bool(row["companion_pass_used"]),
+            sent_at=parse_dt(row["sent_at"]),  # type: ignore[arg-type]
+            responded_at=parse_dt(row["responded_at"]) if row["responded_at"] else None,
+        )
+        inbox_service.create_artifacts_for_invitation(invitation=invitation_obj)
+    conn.commit()
+
+    # Re-use the existing /invitations endpoint serializer so the response
+    # matches what the map page already renders.
+    return resident_invitations(resident_id=resident_id, conn=conn)

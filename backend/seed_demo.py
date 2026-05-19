@@ -54,7 +54,7 @@ def seed(db_path: Path = DB_PATH) -> None:
             location_radius_km, social_comfort, preferred_group_size_min,
             preferred_group_size_max, cost_sensitivity, status, created_at, updated_at)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-        (SOFIA_ID, "Sofia", "sofia@example.com", "English", "Amsterdam", "Oud-West",
+        (SOFIA_ID, "Sofia", "civiccirclenl+sofia@gmail.com", "English", "Amsterdam", "Oud-West",
          3, "small_group_low_pressure", 3, 6, "free_or_low_cost", "active", _now(), _now()),
     )
 
@@ -135,15 +135,17 @@ def seed(db_path: Path = DB_PATH) -> None:
         ("member-felix-004", "Felix"),
     ]
     for mid, fname in demo_members:
+        # civiccirclenl+<name>@gmail.com routes back to the sending mailbox
+        # without bouncing, so demo invitations never poison sender reputation.
         conn.execute(
             """INSERT OR REPLACE INTO residents
                (id, first_name, email, preferred_language, city, neighborhood,
                 location_radius_km, social_comfort, preferred_group_size_min,
                 preferred_group_size_max, cost_sensitivity, status, created_at, updated_at)
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (mid, fname, f"{fname.lower()}@demo.example", "English", "Amsterdam",
-             "Oud-West", 3, "small_group_low_pressure", 2, 6, "free_or_low_cost",
-             "active", _now(), _now()),
+            (mid, fname, f"civiccirclenl+{fname.lower()}@gmail.com", "English",
+             "Amsterdam", "Oud-West", 3, "small_group_low_pressure", 2, 6,
+             "free_or_low_cost", "active", _now(), _now()),
         )
 
     # ── Host ───────────────────────────────────────────────────────────────

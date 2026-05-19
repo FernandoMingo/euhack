@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Accessibility,
@@ -34,7 +35,9 @@ type Step = "browse" | "accepted" | "checked_in" | "reflected";
 const AMSTERDAM = { lat: 52.3702, lng: 4.8952 };
 
 export default function ResidentMapPage() {
+  const router = useRouter();
   const [residentId, setResidentId] = useState<string | null>(null);
+  const [sessionChecked, setSessionChecked] = useState(false);
   const [inbox, setInbox] = useState<ResidentInbox | null>(null);
   const [selected, setSelected] = useState<DemoInvitation | null>(null);
   const [reveal, setReveal] = useState<CircleReveal | null>(null);
@@ -42,11 +45,22 @@ export default function ResidentMapPage() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(
+    null
+  );
+  // Track whether we've already seeded nearby activities for this session
+  // so the call is fired exactly once per page mount even if the geolocate
+  // control re-emits the position as the user moves.
+  const seededNearbyRef = useState<{ done: boolean }>(() => ({ done: false }))[0];
 
   useEffect(() => {
     const session = readDemoSession();
     setResidentId(session.resident_id ?? null);
-  }, []);
+    setSessionChecked(true);
+    if (!session.resident_id) {
+      router.replace("/login");
+    }
+  }, [router]);
 
   const refreshReveal = useCallback(
     async (invitation: DemoInvitation, rid: string) => {
@@ -95,6 +109,27 @@ export default function ResidentMapPage() {
     load(residentId);
   }, [residentId, load]);
 
+  const handleUserLocation = useCallback(
+    async (loc: { lat: number; lng: number }) => {
+      setUserLocation(loc);
+      if (!residentId || seededNearbyRef.done) return;
+      seededNearbyRef.done = true;
+      try {
+        await api.createNearbyActivities(residentId, {
+          lat: loc.lat,
+          lng: loc.lng,
+          count: 4,
+        });
+        await load(residentId);
+      } catch (err) {
+        // Seeding is best-effort: if the resident pool is empty (only Jose),
+        // the backend returns 422 and we just continue with whatever they had.
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [residentId, load, seededNearbyRef]
+  );
+
   const markers: MapMarker[] = useMemo(() => {
     if (!inbox) return [];
     return inbox.invitations
@@ -124,7 +159,7 @@ export default function ResidentMapPage() {
     setBusy("accept");
     setError(null);
     try {
-      await api.acceptInvitation(selected.id);
+      await api.acceptInvitation(selected.id, { resident_id: residentId });
       writeDemoSession({ invitation_id: selected.id });
       await load(residentId, selected.id);
       setStep("accepted");
@@ -140,7 +175,7 @@ export default function ResidentMapPage() {
     setBusy("decline");
     setError(null);
     try {
-      await api.declineInvitation(selected.id);
+      await api.declineInvitation(selected.id, { resident_id: residentId });
       await load(residentId, selected.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -161,6 +196,10 @@ export default function ResidentMapPage() {
     } finally {
       setBusy(null);
     }
+  }
+
+  if (!sessionChecked) {
+    return null;
   }
 
   if (!residentId) {
@@ -200,7 +239,8 @@ export default function ResidentMapPage() {
           markers={markers}
           selectedId={selected?.id ?? null}
           onSelect={handleSelect}
-          fallbackCenter={AMSTERDAM}
+          fallbackCenter={userLocation ?? AMSTERDAM}
+          onUserLocation={handleUserLocation}
         />
 
         <div className="pointer-events-none absolute left-1/2 top-4 z-10 w-full max-w-md -translate-x-1/2 px-4">
@@ -221,12 +261,9 @@ export default function ResidentMapPage() {
                 Once an operator approves a proposed circle, you'll see a calm
                 pin appear on the map.
               </p>
-              <Link
-                href="/operator"
-                className="mt-3 inline-block text-xs text-muted-foreground underline"
-              >
-                Open operator dashboard
-              </Link>
+              <p className="mt-3 text-xs text-muted-foreground">
+                A welzijnscoach will reach out when there's a calm match.
+              </p>
             </div>
           </div>
         )}
@@ -263,16 +300,16 @@ function EmptyResident() {
         size={28}
         strokeWidth={1.6}
       />
-      <h1 className="text-xl font-medium">No resident in this session yet.</h1>
+      <h1 className="text-xl font-medium">Welcome to CivicCircles.</h1>
       <p className="text-sm text-muted-foreground">
-        Open <span className="font-mono">/professional</span> and submit a
-        referral for Sofia first. Then come back here.
+        Sign in with the email your huisarts used to register you. Your invitations
+        will be waiting in your inbox.
       </p>
       <Link
-        href="/professional"
+        href="/login"
         className="inline-flex items-center gap-2 rounded-full bg-[color-mix(in_oklab,var(--sage)_55%,white)] px-4 py-2 text-sm font-medium"
       >
-        Go to professional
+        Sign in
       </Link>
     </div>
   );
