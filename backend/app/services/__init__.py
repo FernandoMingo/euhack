@@ -7,6 +7,21 @@ from app.services.activity_planning_service import (
     PlanGenerationResult,
     PromptSafetyError,
 )
+from app.services.email_client import (
+    EmailClient,
+    EmailConfigurationError,
+    EmailDeliveryResult,
+    EmailMessagePayload,
+    FakeEmailClient,
+    QueuedEmailClient,
+    ResendEmailClient,
+    SMTPEmailClient,
+    build_email_client_from_env,
+)
+from app.services.invitation_inbox_service import (
+    InvitationInboxArtifacts,
+    InvitationInboxService,
+)
 from app.services.llm_client import (
     DEFAULT_OPENAI_MODEL,
     LLMClient,
@@ -29,6 +44,13 @@ from app.services.verification_service import (
 __all__ = [
     "ActivityPlanningService",
     "DEFAULT_OPENAI_MODEL",
+    "EmailClient",
+    "EmailConfigurationError",
+    "EmailDeliveryResult",
+    "EmailMessagePayload",
+    "FakeEmailClient",
+    "InvitationInboxArtifacts",
+    "InvitationInboxService",
     "LLMClient",
     "LLMConfigurationError",
     "LLMResponse",
@@ -42,8 +64,12 @@ __all__ = [
     "PROMPT_VERSION",
     "PlanGenerationResult",
     "PromptSafetyError",
+    "QueuedEmailClient",
     "ReferralMatchingWorkflowResult",
+    "ResendEmailClient",
+    "SMTPEmailClient",
     "StubVerificationService",
     "VerificationFailure",
     "VerificationResult",
+    "build_email_client_from_env",
 ]

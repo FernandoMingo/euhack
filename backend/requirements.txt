@@ -4,6 +4,13 @@ httpx
 pydantic[email]
 uvicorn
 
-# Optional: enables the LLM-backed activity-planning service.
-# Install openai and set OPENAI_API_KEY to enable OpenAIChatLLMClient.
+# Transactional email (invitation sends): SMTPEmailClient uses stdlib
+# smtplib (no extra package; works with Gmail SMTP + App Password).
+# ResendEmailClient uses httpx above. Set SMTP_* env vars (or RESEND_API_KEY
+# + EMAIL_FROM) when running python -m app.api, or inject a client directly
+# into create_app.
+
+# Optional: enables the LLM-backed activity-planning service. The backend
+# imports openai lazily, so this dependency is only required when the
+# operator actually requests a plan via OpenAIChatLLMClient.
 openai

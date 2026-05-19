@@ -21,15 +21,23 @@ from app.api.converters import (
     invitation_to_response,
     match_candidate_to_response,
     matching_run_to_response,
+    outbound_email_to_response,
     peer_flag_to_response,
     peer_rating_to_response,
     peer_rollup_to_response,
 )
-from app.api.deps import get_connection, get_llm_client
-from app.repositories import ActivityRepository, MatchingRepository, RatingRepository
+from app.api.deps import get_connection, get_email_client, get_llm_client
+from app.repositories import (
+    ActivityRepository,
+    MatchingRepository,
+    OutboundEmailRepository,
+    RatingRepository,
+)
 from app.repositories.base import parse_dt
 from app.services import (
     ActivityPlanningService,
+    EmailClient,
+    InvitationInboxService,
     LLMClient,
     LLMConfigurationError,
     LLMResponseError,
@@ -313,9 +321,12 @@ def send_invitations_for_circle(
     circle_id: str,
     actor_id: str | None = None,
     conn: Connection = Depends(get_connection),
+    email_client: EmailClient | None = Depends(get_email_client),
 ) -> schemas.InvitationPromotionResponse:
     try:
-        invitations = MatchingWorkflowService(conn).send_invitations_for_approved_circle(
+        invitations = MatchingWorkflowService(
+            conn, email_client=email_client
+        ).send_invitations_for_approved_circle(
             circle_id=circle_id,
             actor_id=actor_id,
         )
@@ -325,6 +336,64 @@ def send_invitations_for_circle(
         circle_id=circle_id,
         invitations=[invitation_to_response(invitation) for invitation in invitations],
     )
+
+
+# ---------- Outbound email queue ----------
+
+
+@router.get(
+    "/email-messages",
+    response_model=list[schemas.OutboundEmailMessageResponse],
+)
+def list_email_messages(
+    delivery_status: schemas.EmailDeliveryStatusLiteral | None = Query(
+        default=None, alias="status"
+    ),
+    limit: int = Query(default=100, ge=1, le=500),
+    conn: Connection = Depends(get_connection),
+) -> list[schemas.OutboundEmailMessageResponse]:
+    messages = OutboundEmailRepository(conn).list_messages(
+        delivery_status=delivery_status, limit=limit
+    )
+    return [outbound_email_to_response(message) for message in messages]
+
+
+@router.get(
+    "/email-messages/{message_id}",
+    response_model=schemas.OutboundEmailMessageResponse,
+)
+def get_email_message(
+    message_id: str,
+    conn: Connection = Depends(get_connection),
+) -> schemas.OutboundEmailMessageResponse:
+    message = OutboundEmailRepository(conn).get_message(message_id)
+    if message is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Email message not found"
+        )
+    return outbound_email_to_response(message)
+
+
+@router.post(
+    "/email-messages/{message_id}/mark-sent",
+    response_model=schemas.OutboundEmailMessageResponse,
+)
+def mark_email_message_sent(
+    message_id: str,
+    payload: schemas.OutboundEmailMarkSentRequest | None = None,
+    conn: Connection = Depends(get_connection),
+) -> schemas.OutboundEmailMessageResponse:
+    if OutboundEmailRepository(conn).get_message(message_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Email message not found"
+        )
+    payload = payload or schemas.OutboundEmailMarkSentRequest()
+    message = InvitationInboxService(conn).mark_email_sent(
+        message_id=message_id,
+        provider_message_id=payload.provider_message_id,
+        actor_id=payload.actor_id,
+    )
+    return outbound_email_to_response(message)
 
 
 def _json_object(value: str) -> dict[str, object]:

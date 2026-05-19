@@ -12,7 +12,7 @@ from app.api.main import create_app
 from app.db import DEFAULT_DB_PATH
 from app.env import load_default_env_files, load_env_file
 from app.logging_config import configure_logging
-from app.services import OpenAIChatLLMClient
+from app.services import OpenAIChatLLMClient, build_email_client_from_env
 
 
 def main() -> None:
@@ -39,7 +39,25 @@ def main() -> None:
     if loaded:
         logging.getLogger(__name__).info("Loaded %d environment value(s)", len(loaded))
 
-    app = create_app(db_path=args.db_path, llm_client=OpenAIChatLLMClient())
+    email_client = build_email_client_from_env()
+    log = logging.getLogger(__name__)
+    if email_client is not None:
+        log.info(
+            "Transactional email enabled (provider=%s).",
+            getattr(email_client, "provider_name", "unknown"),
+        )
+    else:
+        log.info(
+            "Transactional email not configured; invitation outbound rows stay "
+            "queued. Set SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD (+ EMAIL_FROM) "
+            "for Gmail/SMTP, or RESEND_API_KEY + EMAIL_FROM for Resend."
+        )
+
+    app = create_app(
+        db_path=args.db_path,
+        llm_client=OpenAIChatLLMClient(),
+        email_client=email_client,
+    )
     uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level.lower())
 
 

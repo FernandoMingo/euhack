@@ -25,6 +25,7 @@ from app.dataclasses import (
     Invitation,
     MatchCandidate,
     MatchingRun,
+    OutboundEmailMessage,
     PeerRating,
     PeerRatingFlag,
     PeerRatingRollup,
@@ -34,6 +35,7 @@ from app.dataclasses import (
     ResidentAvailability,
     ResidentAvoidance,
     ResidentFeedback,
+    ResidentInboxItem,
     ResidentPreference,
     TrustedProfessional,
     Venue,
@@ -400,4 +402,43 @@ def peer_flag_to_response(f: PeerRatingFlag) -> schemas.PeerRatingFlagResponse:
         severity=f.severity,
         details=f.details,
         created_at=f.created_at,
+    )
+
+
+def inbox_item_to_response(item: ResidentInboxItem) -> schemas.ResidentInboxItemResponse:
+    return schemas.ResidentInboxItemResponse(
+        id=item.id,
+        resident_id=item.resident_id,
+        invitation_id=item.invitation_id,
+        activity_id=item.activity_id,
+        circle_id=item.circle_id,
+        item_type=item.item_type,
+        title=item.title,
+        body=item.body,
+        status=item.status,
+        metadata=_safe_loads_object(item.metadata_json) or {},
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+        read_at=item.read_at,
+        archived_at=item.archived_at,
+    )
+
+
+def outbound_email_to_response(
+    message: OutboundEmailMessage,
+) -> schemas.OutboundEmailMessageResponse:
+    return schemas.OutboundEmailMessageResponse(
+        id=message.id,
+        inbox_item_id=message.inbox_item_id,
+        resident_id=message.resident_id,
+        to_email=message.to_email,
+        subject=message.subject,
+        body=message.body,
+        provider=message.provider,
+        delivery_status=message.delivery_status,
+        provider_message_id=message.provider_message_id,
+        error_message=message.error_message,
+        created_at=message.created_at,
+        updated_at=message.updated_at,
+        sent_at=message.sent_at,
     )

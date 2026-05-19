@@ -17,6 +17,7 @@ from app.api.routers import (
     consents,
     demo,
     health,
+    inbox,
     invitations,
     operator,
     professionals,
@@ -25,6 +26,7 @@ from app.api.routers import (
     templates,
 )
 from app.db import DEFAULT_DB_PATH, init_db
+from app.services.email_client import EmailClient
 from app.services.llm_client import LLMClient
 
 
@@ -33,6 +35,7 @@ def create_app(
     db_path: Path | str = DEFAULT_DB_PATH,
     initialize_db: bool = True,
     llm_client: LLMClient | None = None,
+    email_client: EmailClient | None = None,
 ) -> FastAPI:
     app = FastAPI(title="CivicCircles API", version="0.2.0")
     app.add_middleware(
@@ -44,6 +47,7 @@ def create_app(
     )
     app.state.db_path = Path(db_path)
     app.state.llm_client = llm_client
+    app.state.email_client = email_client
     if initialize_db:
         init_db(db_path=db_path)
 
@@ -58,6 +62,7 @@ def create_app(
     app.include_router(activities.circles_router)
     app.include_router(invitations.router)
     app.include_router(consents.router)
+    app.include_router(inbox.router)
     app.include_router(operator.router)
     app.include_router(demo.router)
 

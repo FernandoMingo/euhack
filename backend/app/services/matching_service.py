@@ -16,6 +16,8 @@ from app.repositories import (
     ResidentRepository,
 )
 from app.repositories.base import new_id, utc_now_iso
+from app.services.email_client import EmailClient
+from app.services.invitation_inbox_service import InvitationInboxService
 
 
 @dataclass(slots=True, frozen=True)
@@ -33,13 +35,21 @@ class MatchingWorkflowService:
     matching runs, circle proposals, invitations, and audit rows remain in sync.
     """
 
-    def __init__(self, conn: Connection) -> None:
+    def __init__(
+        self,
+        conn: Connection,
+        *,
+        email_client: EmailClient | None = None,
+    ) -> None:
         self.conn = conn
         self.activities = ActivityRepository(conn)
         self.templates = ActivityTemplateRepository(conn)
         self.matching = MatchingRepository(conn)
         self.referrals = ReferralRepository(conn)
         self.residents = ResidentRepository(conn)
+        self.inbox_service = InvitationInboxService(
+            conn, email_client=email_client
+        )
 
     def accept_referral_and_propose_matches(
         self,
@@ -181,13 +191,12 @@ class MatchingWorkflowService:
 
         invitations: list[Invitation] = []
         for member in self.activities.list_circle_members(circle_id=circle_id):
-            invitations.append(
-                self.activities.create_invitation(
-                    circle_id=circle_id,
-                    activity_id=circle.activity_id,
-                    resident_id=member.resident_id,
-                )
+            invitation = self.activities.create_invitation(
+                circle_id=circle_id,
+                activity_id=circle.activity_id,
+                resident_id=member.resident_id,
             )
+            invitations.append(invitation)
             self._add_audit_event(
                 actor_type="system",
                 actor_id=actor_id,
@@ -195,6 +204,10 @@ class MatchingWorkflowService:
                 entity_type="resident",
                 entity_id=member.resident_id,
                 metadata={"circle_id": circle_id, "activity_id": circle.activity_id},
+            )
+            self.inbox_service.create_artifacts_for_invitation(
+                invitation=invitation,
+                actor_id=actor_id,
             )
         self.activities.update_circle_status(circle_id=circle_id, status="invitations_sent")
         self._add_audit_event(

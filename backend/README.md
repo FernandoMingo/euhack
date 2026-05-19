@@ -26,6 +26,10 @@ This backend folder contains the first implementation slice for CivicCircles:
   - relaxes the `activity_id` foreign key on `match_candidates`, `activity_feature_weights`, and `resident_activity_similarity` so the matching engine can persist explainability rows that reference activity templates as well as concrete activities
 - `sql/004_circle_template_refs.sql`:
   - relaxes `circles.activity_id` to be nullable and adds a nullable `template_id` column so the circle-matching engine can persist proposed circles anchored either to a concrete approved activity or to an activity template before approval. A CHECK constraint enforces that at least one anchor is set.
+- `sql/005_activity_plans.sql`:
+  - adds the `activity_plans` table used by the LLM-backed activity-planning service (Feature 9).
+- `sql/006_invitation_inbox.sql`:
+  - adds `resident_inbox_items` (resident-facing invitation messages with read/archive state) and `outbound_email_messages` (queued/sent/failed delivery audit), used by the invitation inbox service (Feature 10).
 
 ### 2) Python dataclasses
 - File: `app/dataclasses.py`
@@ -389,6 +393,131 @@ PYTHONPATH="$(pwd)/backend" python3 -m app.api --host 127.0.0.1 --port 8000
 If no LLM client is configured, or if the API key / `openai` package is
 missing, the planning endpoints respond with HTTP 503.
 
+## Resident invitation inbox + email queue (Feature 10)
+
+After Feature 8 a `MatchingWorkflowService.send_invitations_for_approved_circle`
+call creates one `invitations` row per circle member. Feature 10 hangs two
+more artifacts off each invitation so residents can read it and the system
+can later send a real email:
+
+- **`resident_inbox_items`** — a resident-facing message with privacy-safe
+  English copy (activity title, time, venue, short low-pressure body) plus
+  `unread`/`read`/`archived` state. No fit scores, peer ratings, matching
+  rationales, or other residents' data ever land in the inbox.
+- **`outbound_email_messages`** — the email-delivery audit. Every inbox item
+  also passes through a pluggable `EmailClient`. The default client
+  (`QueuedEmailClient`) marks the row `queued` and does not send anything.
+  Two real implementations ship out of the box:
+  - **SMTP / Gmail** (`SMTPEmailClient`) — uses stdlib `smtplib` and works
+    with a Gmail address + App Password (no custom domain required). This
+    is the recommended path while you do not own a domain.
+  - **Resend** (`ResendEmailClient`) — uses the Resend HTTPS API and a
+    verified sender domain.
+
+  Tests use `FakeEmailClient` (records sends, no network) or, for HTTP, a
+  mocked `httpx` transport; the SMTP client accepts a `smtp_factory` for
+  tests so it can run fully offline.
+
+The service writes `inbox_item.created` + `email_message.queued`/`sent`/`failed`
+audit rows so the whole hand-off is auditable.
+
+### Resident-facing endpoints
+
+- `GET /api/residents/{resident_id}/inbox?status=unread` — list inbox items
+  (newest first). `status` accepts `unread`, `read`, or `archived`.
+- `GET /api/residents/{resident_id}/inbox/{item_id}` — fetch one item.
+  Returns 404 if the item belongs to a different resident.
+- `POST /api/residents/{resident_id}/inbox/{item_id}/read` — mark as read
+  (idempotent).
+- `POST /api/residents/{resident_id}/inbox/{item_id}/archive` — archive
+  (idempotent).
+
+### Operator email-queue endpoints
+
+- `GET /api/operator/email-messages?status=queued` — list outbound email
+  rows; `status` accepts `queued`, `sent`, `failed`, or `skipped`.
+- `GET /api/operator/email-messages/{message_id}` — fetch one row.
+- `POST /api/operator/email-messages/{message_id}/mark-sent` — manually
+  flip a row to `sent` once a real send has been attempted. Body:
+  `{"provider_message_id": "...", "actor_id": "operator_1"}`.
+
+### Wiring the email client
+
+**Default (no network):** omit `email_client` or pass `QueuedEmailClient()`.
+
+`build_email_client_from_env()` picks a real client based on env vars in the
+following priority:
+
+1. `SMTP_HOST` (+ `SMTP_USERNAME` + `SMTP_PASSWORD` + optional `EMAIL_FROM`) ⇒
+   `SMTPEmailClient` (works with Gmail and any SMTP provider).
+2. `RESEND_API_KEY` + `EMAIL_FROM` ⇒ `ResendEmailClient`.
+3. otherwise `None`, so the queued no-op path is used.
+
+The `python -m app.api` CLI calls this automatically after loading `.env`.
+
+#### Option A: Gmail SMTP (no custom domain required)
+
+You need a Gmail account with 2-Step Verification enabled and an **App
+Password** generated at <https://myaccount.google.com/apppasswords>.
+
+Add to your repo-root `.env`:
+
+```bash
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=you@gmail.com
+SMTP_PASSWORD=xxxx xxxx xxxx xxxx   # 16-character App Password
+EMAIL_FROM=CivicCircles <you@gmail.com>   # must match SMTP_USERNAME for Gmail
+# SMTP_USE_STARTTLS=1   # default; set SMTP_USE_SSL=1 + SMTP_PORT=465 instead
+                        # if you want implicit TLS
+```
+
+Then start the API with `python -m app.api`. Successful sends persist
+`delivery_status=sent`; auth/relay failures are persisted with
+`delivery_status=failed` and a short error message.
+
+Gmail SMTP has a per-day send cap (≈500 emails per Gmail account, ≈2000
+for Google Workspace) and is intended for development / low-volume use.
+
+#### Option B: Resend (production-style, requires verified domain)
+
+Add to your repo-root `.env`:
+
+```bash
+RESEND_API_KEY=re_...
+EMAIL_FROM=CivicCircles <invites@your-verified-domain.example>
+```
+
+Then start the API with `python -m app.api`. Invitation promotion calls
+Resend’s [`POST /emails`](https://resend.com/docs/api-reference/emails/send-email);
+successful sends persist `delivery_status=sent` and the Resend message `id`.
+
+If `RESEND_API_KEY` is set but `EMAIL_FROM` is empty (or `SMTP_HOST` is set
+without complete credentials), startup logs a warning and outbound rows
+stay queued.
+
+#### Programmatic wiring
+
+```python
+from app.api.main import create_app
+from app.services import SMTPEmailClient, ResendEmailClient
+
+# Gmail SMTP shortcut:
+gmail_client = SMTPEmailClient.for_gmail(
+    username="you@gmail.com",
+    app_password="xxxx xxxx xxxx xxxx",
+)
+
+app = create_app(
+    db_path="backend/civiccircles.db",
+    email_client=gmail_client,
+)
+```
+
+The `email_client` argument is optional. If omitted, each request that does
+not override `app.state.email_client` uses `QueuedEmailClient()` inside
+`InvitationInboxService`, so unit tests never hit the network.
+
 ### Operator endpoints
 
 - `POST /api/operator/circles/{circle_id}/activity-plan` —
@@ -490,6 +619,11 @@ Current test coverage includes:
 - LLM-backed activity planning: deterministic prompt assembly, prompt-safety
   substring guards, fake-client persistence, audit rows for request /
   generation / failure / operator decision
+- Resident invitation inbox: inbox-item-per-resident on invitation
+  promotion, privacy-safe inbox copy, queued (not sent) emails by default
+  with a fake email client for opt-in send paths, read/archive transitions,
+  resident-vs-operator route boundaries, and audit rows for
+  `inbox_item.created` / `email_message.queued` / `email_message.sent`
 
 ## Logging usage
 
@@ -504,7 +638,10 @@ init_db()
 
 ## Next recommended steps
 
-1. Expose thin HTTP/API routes for the v2 matching workflow service.
-2. Add richer operator review screens for proposed circles, unmatched residents, and audit explanations.
-3. Add a richer migrations strategy (up/down scripts) for production evolution.
+1. Add a real email-provider implementation behind the `EmailClient`
+   interface (e.g. SES / Postmark) and an operator UI for the email queue.
+2. Add richer operator review screens for proposed circles, unmatched
+   residents, and audit explanations.
+3. Add a richer migrations strategy (up/down scripts) for production
+   evolution.
 

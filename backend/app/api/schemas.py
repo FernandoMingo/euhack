@@ -665,3 +665,49 @@ class PeerRatingFlagResponse(BaseModel):
     severity: FlagSeverityLiteral
     details: str | None
     created_at: datetime
+
+
+# ---------- Resident invitation inbox + outbound email ----------
+
+
+InboxItemTypeLiteral = Literal["activity_invitation"]
+InboxItemStatusLiteral = Literal["unread", "read", "archived"]
+EmailDeliveryStatusLiteral = Literal["queued", "sent", "failed", "skipped"]
+
+
+class ResidentInboxItemResponse(BaseModel):
+    id: str
+    resident_id: str
+    invitation_id: str | None
+    activity_id: str | None
+    circle_id: str | None
+    item_type: InboxItemTypeLiteral
+    title: str
+    body: str
+    status: InboxItemStatusLiteral
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+    read_at: datetime | None
+    archived_at: datetime | None
+
+
+class OutboundEmailMessageResponse(BaseModel):
+    id: str
+    inbox_item_id: str | None
+    resident_id: str
+    to_email: str
+    subject: str
+    body: str
+    provider: str
+    delivery_status: EmailDeliveryStatusLiteral
+    provider_message_id: str | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+    sent_at: datetime | None
+
+
+class OutboundEmailMarkSentRequest(BaseModel):
+    provider_message_id: str | None = None
+    actor_id: str | None = None

@@ -7,6 +7,7 @@ from sqlite3 import Connection
 from fastapi import Request
 
 from app.db import connect
+from app.services.email_client import EmailClient
 from app.services.llm_client import LLMClient
 
 
@@ -23,3 +24,8 @@ def get_connection(request: Request) -> Iterator[Connection]:
 def get_llm_client(request: Request) -> LLMClient | None:
     """Return the configured LLM client (if any) for this app instance."""
     return getattr(request.app.state, "llm_client", None)
+
+
+def get_email_client(request: Request) -> EmailClient | None:
+    """Return the configured email client (if any) for this app instance."""
+    return getattr(request.app.state, "email_client", None)

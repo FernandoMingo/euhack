@@ -413,6 +413,60 @@ StructureType = Literal["guided", "self_paced", "mixed"]
 ActivityPlanStatus = Literal["draft", "generated", "approved", "rejected", "edited", "failed"]
 
 
+InboxItemType = Literal["activity_invitation"]
+InboxItemStatus = Literal["unread", "read", "archived"]
+EmailDeliveryStatus = Literal["queued", "sent", "failed", "skipped"]
+
+
+@dataclass(slots=True)
+class ResidentInboxItem:
+    """Resident-facing inbox row.
+
+    Inbox items are deliberately privacy-safe: they store activity title /
+    time / venue and a short invitation body, but never fit scores,
+    matching explanations, peer ratings, or other residents' personal data.
+    """
+
+    id: str
+    resident_id: str
+    item_type: InboxItemType
+    title: str
+    body: str
+    status: InboxItemStatus
+    metadata_json: str
+    created_at: datetime
+    updated_at: datetime
+    invitation_id: str | None = None
+    activity_id: str | None = None
+    circle_id: str | None = None
+    read_at: datetime | None = None
+    archived_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class OutboundEmailMessage:
+    """Outbound email delivery row.
+
+    The default `EmailClient` does not send real email; rows are persisted
+    with `delivery_status='queued'` so an operator (or a future provider)
+    can take them through to `sent` / `failed` later.
+    """
+
+    id: str
+    resident_id: str
+    to_email: str
+    subject: str
+    body: str
+    provider: str
+    delivery_status: EmailDeliveryStatus
+    created_at: datetime
+    updated_at: datetime
+    inbox_item_id: str | None = None
+    provider_message_id: str | None = None
+    error_message: str | None = None
+    sent_at: datetime | None = None
+
+
 @dataclass(slots=True)
 class ActivityPlan:
     """LLM-generated activity plan draft for an operator to review."""

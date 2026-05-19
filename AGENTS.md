@@ -73,9 +73,9 @@ Feature-by-feature, with file references and commits.
 | FastAPI HTTP API across core repositories | `backend/app/api/**/*.py`, `backend/requirements.txt`, `backend/tests/test_api_*.py`, `backend/tests/test_onboarding_api.py` | `2b6659a` / `842b397` merge |
 | Behavioral matching v2 + fair grouping workflow slice | `backend/app/matching/behavioral.py`, `backend/app/matching/vectorizer.py`, `backend/app/matching/scoring.py`, `backend/app/matching/engine.py`, `backend/app/matching/grouping.py`, `backend/app/services/matching_service.py`, `backend/tests/test_matching_service.py` | pending |
 | LLM-backed activity planning (operator-reviewable plans) | `backend/sql/005_activity_plans.sql`, `backend/app/services/activity_planning_service.py`, `backend/app/services/llm_client.py`, `backend/app/repositories/activity_plan_repository.py`, `backend/app/api/routers/operator.py`, `backend/tests/test_activity_planning_service.py`, `backend/tests/test_api_activity_planning.py` | pending |
+| Resident invitation inbox + outbound email queue | `backend/sql/006_invitation_inbox.sql`, `backend/app/services/invitation_inbox_service.py`, `backend/app/services/email_client.py`, `backend/app/repositories/resident_inbox_repository.py`, `backend/app/repositories/outbound_email_repository.py`, `backend/app/api/routers/inbox.py`, `backend/app/api/routers/operator.py`, `backend/tests/test_invitation_inbox_service.py`, `backend/tests/test_api_inbox.py` | pending |
 
 ### Not built yet
-- HTTP/API routes for the matching orchestration service
 - Production Vektis/CIBG/KvK verification integrations; current verification is a deterministic stub
 - Frontend
 
@@ -105,7 +105,7 @@ euhack/
 │   │   │   ├── deps.py                (per-request DB connection dependency)
 │   │   │   └── routers/               (health, professionals, referrals, residents,
 │   │   │                                templates, activities, invitations, consents,
-│   │   │                                operator)
+│   │   │                                inbox, operator)
 │   │   ├── matching/
 │   │   │   ├── __init__.py            (public matching API)
 │   │   │   ├── vectorizer.py          (resident + template feature vectors)
@@ -116,6 +116,8 @@ euhack/
 │   │   │   └── grouping.py            (deterministic circle/group matching v1)
 │   │   ├── services/
 │   │   │   ├── activity_planning_service.py (LLM-backed activity plan drafts)
+│   │   │   ├── email_client.py          (EmailClient: queued, Resend, fake)
+│   │   │   ├── invitation_inbox_service.py (resident inbox + email queueing)
 │   │   │   ├── llm_client.py            (LLMClient interface + OpenAI impl)
 │   │   │   ├── matching_service.py       (matching workflow orchestration)
 │   │   │   ├── onboarding_service.py  (professional signup + resident referral flow)
@@ -123,6 +125,8 @@ euhack/
 │   │   └── repositories/
 │   │       ├── base.py
 │   │       ├── resident_repository.py
+│   │       ├── resident_inbox_repository.py
+│   │       ├── outbound_email_repository.py
 │   │       ├── activity_repository.py
 │   │       ├── activity_template_repository.py
 │   │       ├── activity_plan_repository.py
@@ -141,7 +145,8 @@ euhack/
 │   │   ├── 003_onboarding_fields.sql
 │   │   ├── 003_matching_template_refs.sql
 │   │   ├── 004_circle_template_refs.sql
-│   │   └── 005_activity_plans.sql
+│   │   ├── 005_activity_plans.sql
+│   │   └── 006_invitation_inbox.sql
 │   └── tests/
 │       ├── test_db_schema.py
 │       ├── test_repositories.py
@@ -157,7 +162,9 @@ euhack/
 │       ├── test_api_invitations_consents.py
 │       ├── test_api_operator.py
 │       ├── test_activity_planning_service.py
-│       └── test_api_activity_planning.py
+│       ├── test_api_activity_planning.py
+│       ├── test_invitation_inbox_service.py
+│       └── test_api_inbox.py
 ```
 
 ---
@@ -180,6 +187,7 @@ Key entities and what they exist for:
 - **Graph signals (activity/group only)**: `graph_edges`, `graph_scores`
 - **Internal peer ratings**: `peer_ratings`, `peer_rating_rollups`, `peer_rating_flags`
 - **LLM-generated planning artifacts**: `activity_plans` (prompt payload + model metadata + structured plan JSON + operator decision)
+- **Resident inbox + email queue**: `resident_inbox_items` (resident-facing invitation messages with `unread`/`read`/`archived` state), `outbound_email_messages` (queued / sent / failed delivery audit per resident)
 - **Safety and audit**: `safety_reports`, `audit_events`
 
 The schema enforces foreign keys, has check constraints on enum values, and uses upsert patterns where appropriate.
@@ -226,6 +234,30 @@ Run the FastAPI app with the LLM-backed activity-planning service:
 printf 'OPENAI_API_KEY=sk-...\n' > .env
 PYTHONPATH="$(pwd)/backend" python3 -m app.api --host 127.0.0.1 --port 8000
 ```
+
+Optional: send real invitation email when operators promote approved
+circles. Two providers ship; `build_email_client_from_env()` picks SMTP
+first, then Resend.
+
+Gmail SMTP via App Password (no custom domain needed — recommended for
+local/demo use; requires 2-Step Verification + an App Password from
+<https://myaccount.google.com/apppasswords>):
+
+```bash
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=you@gmail.com
+SMTP_PASSWORD='xxxx xxxx xxxx xxxx'
+EMAIL_FROM='CivicCircles <you@gmail.com>'
+```
+
+Resend (production-style, needs a verified sender domain):
+
+```bash
+RESEND_API_KEY=re_...
+EMAIL_FROM='CivicCircles <invites@your-verified-domain.example>'
+```
+
 The CLI loads `.env` from the repo root (and accepts `.emv` as a
 typo-tolerant alias). If `OPENAI_API_KEY` is unset or `openai` is not
 installed, the planning endpoints respond with HTTP 503 — every other route
@@ -261,6 +293,72 @@ Each template carries structured attributes used for vectorization:
 ---
 
 ## 10. Next feature to build
+
+**Feature 10: Resident invitation inbox + email queue (built).**
+
+When an operator promotes an approved circle to invitations, each invited
+resident now receives:
+
+1. an `invitations` lifecycle row (as before),
+2. a `resident_inbox_items` row with a privacy-safe English invitation
+   (activity title, time, venue, short low-pressure body), and
+3. an `outbound_email_messages` row delivered through a pluggable
+   `EmailClient`. The default path uses `QueuedEmailClient`, which never
+   sends a real message; rows stay `queued` until you wire Resend (via
+   `RESEND_API_KEY` + `EMAIL_FROM` on the API CLI), inject `ResendEmailClient`
+   in `create_app`, or mark rows sent manually. Tests inject a
+   `FakeEmailClient` that records sends without dispatching them.
+
+Implemented:
+
+1. `sql/006_invitation_inbox.sql` adds `resident_inbox_items` and
+   `outbound_email_messages` tables. Inbox items track item type, title,
+   body, `unread`/`read`/`archived` status, read/archived timestamps,
+   and a privacy-safe `metadata_json`. Email messages track the target
+   address, subject/body, provider, delivery status, and provider/error
+   metadata.
+2. `ResidentInboxItem` + `OutboundEmailMessage` dataclasses and matching
+   `ResidentInboxRepository` / `OutboundEmailRepository`.
+3. `app/services/email_client.py` exposes a narrow `EmailClient` protocol,
+ `QueuedEmailClient` (default no-send), `SMTPEmailClient` (stdlib
+ `smtplib`; works with Gmail SMTP + App Password — no custom domain
+ required), `ResendEmailClient` (Resend HTTP API via `httpx`),
+ `build_email_client_from_env()` (prefers SMTP env vars, falls back to
+ Resend), and `FakeEmailClient` (test double).
+4. `app/services/invitation_inbox_service.py` composes inbox-item creation +
+   email queueing for every invitation. It is invoked from inside
+   `MatchingWorkflowService.send_invitations_for_approved_circle` so the
+   lifecycle row, inbox item, and queued email stay consistent inside one
+   transaction.
+5. Resident-facing endpoints under `/api/residents/{resident_id}/inbox`:
+   `GET /` (with `?status=unread|read|archived`), `GET /{item_id}`,
+   `POST /{item_id}/read`, `POST /{item_id}/archive`. Routes enforce that
+   the item belongs to the resident in the path.
+6. Operator endpoints under `/api/operator`:
+   `GET /email-messages?status=queued`, `GET /email-messages/{id}`,
+   `POST /email-messages/{id}/mark-sent`.
+7. Audit events: `inbox_item.created`, `email_message.queued`,
+   `email_message.sent`, `email_message.failed`.
+8. `create_app(..., email_client=...)` wires the configured email client.
+ The default omits the parameter so tests and programmatic callers keep
+ the queued path. `python -m app.api` loads `.env` and calls
+ `build_email_client_from_env()`, which picks `SMTPEmailClient` when
+ `SMTP_HOST` + `SMTP_USERNAME` + `SMTP_PASSWORD` (+ optional `EMAIL_FROM`)
+ are set (Gmail SMTP works out of the box with an App Password), or
+ `ResendEmailClient` when `RESEND_API_KEY` + `EMAIL_FROM` are set.
+
+Privacy guardrails enforced here:
+
+- Inbox copy contains only activity title / time / venue and a short
+  warm message. It never contains fit scores, peer ratings, matching
+  rationales, or other residents' names.
+- The inbox `metadata_json` is restricted to IDs (`invitation_id`,
+  `activity_id`, `circle_id`) plus activity/venue identity. It is not a
+  carrier for scoring or peer-rating data.
+- Resident inbox endpoints check item ownership before responding.
+- The default `EmailClient` never sends real email until you opt in
+ (SMTP/Gmail or Resend env vars on the CLI, or inject `SMTPEmailClient` /
+ `ResendEmailClient` yourself).
 
 **Feature 9: LLM-backed operator-reviewable activity plans (built).**
 
