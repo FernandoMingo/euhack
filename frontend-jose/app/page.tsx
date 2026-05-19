@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { Chip } from "@/components/Chip";
 import { Greeting } from "@/components/Greeting";
+import { MapView, type MapMarker } from "@/components/MapView";
+import { BottomSheet } from "@/components/BottomSheet";
 import {
   api,
   readDemoSession,
@@ -29,12 +31,15 @@ import {
 
 type Step = "browse" | "accepted" | "checked_in" | "reflected";
 
-export default function ResidentPage() {
+const AMSTERDAM = { lat: 52.3702, lng: 4.8952 };
+
+export default function ResidentMapPage() {
   const [residentId, setResidentId] = useState<string | null>(null);
   const [inbox, setInbox] = useState<ResidentInbox | null>(null);
   const [selected, setSelected] = useState<DemoInvitation | null>(null);
   const [reveal, setReveal] = useState<CircleReveal | null>(null);
   const [step, setStep] = useState<Step>("browse");
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,39 +48,76 @@ export default function ResidentPage() {
     setResidentId(session.resident_id ?? null);
   }, []);
 
-  const load = useCallback(async (id: string) => {
-    setError(null);
-    try {
-      const data = await api.residentInbox(id);
-      setInbox(data);
-      const session = readDemoSession();
-      const target =
-        data.invitations.find((i) => i.id === session.invitation_id) ??
-        data.invitations[0] ??
-        null;
-      setSelected(target);
-      if (target) {
-        if (target.status === "accepted") setStep("accepted");
+  const refreshReveal = useCallback(
+    async (invitation: DemoInvitation, rid: string) => {
+      try {
+        const rev = await api.circleReveal(invitation.activity_id, rid);
+        setReveal(rev);
+        if (!rev.locked) setStep("checked_in");
+        else if (invitation.status === "accepted") setStep("accepted");
         else setStep("browse");
-        try {
-          const rev = await api.circleReveal(target.activity_id, id);
-          setReveal(rev);
-          if (!rev.locked) setStep("checked_in");
-        } catch {
-          // reveal may 404 until check-in is recorded; ignore
-        }
-      } else {
+      } catch {
         setReveal(null);
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
+    },
+    []
+  );
+
+  const load = useCallback(
+    async (id: string, focusInvitationId?: string) => {
+      setError(null);
+      try {
+        const data = await api.residentInbox(id);
+        setInbox(data);
+        const target =
+          (focusInvitationId &&
+            data.invitations.find((i) => i.id === focusInvitationId)) ||
+          data.invitations.find(
+            (i) => i.id === readDemoSession().invitation_id
+          ) ||
+          data.invitations[0] ||
+          null;
+        setSelected(target);
+        if (target) {
+          await refreshReveal(target, id);
+        } else {
+          setReveal(null);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [refreshReveal]
+  );
 
   useEffect(() => {
     if (!residentId) return;
     load(residentId);
   }, [residentId, load]);
+
+  const markers: MapMarker[] = useMemo(() => {
+    if (!inbox) return [];
+    return inbox.invitations
+      .filter(
+        (i) =>
+          i.activity.venue.lat !== null && i.activity.venue.lng !== null
+      )
+      .map((i) => ({
+        id: i.id,
+        latitude: i.activity.venue.lat as number,
+        longitude: i.activity.venue.lng as number,
+        title: i.activity.title,
+      }));
+  }, [inbox]);
+
+  function handleSelect(id: string) {
+    const inv = inbox?.invitations.find((i) => i.id === id);
+    if (!inv || !residentId) return;
+    setSelected(inv);
+    setSheetOpen(true);
+    writeDemoSession({ invitation_id: inv.id });
+    refreshReveal(inv, residentId);
+  }
 
   async function accept() {
     if (!selected || !residentId) return;
@@ -84,7 +126,7 @@ export default function ResidentPage() {
     try {
       await api.acceptInvitation(selected.id);
       writeDemoSession({ invitation_id: selected.id });
-      await load(residentId);
+      await load(residentId, selected.id);
       setStep("accepted");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -99,7 +141,7 @@ export default function ResidentPage() {
     setError(null);
     try {
       await api.declineInvitation(selected.id);
-      await load(residentId);
+      await load(residentId, selected.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -113,9 +155,7 @@ export default function ResidentPage() {
     setError(null);
     try {
       await api.checkIn(selected.activity_id, residentId);
-      const rev = await api.circleReveal(selected.activity_id, residentId);
-      setReveal(rev);
-      setStep("checked_in");
+      await refreshReveal(selected, residentId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -127,65 +167,90 @@ export default function ResidentPage() {
     return <EmptyResident />;
   }
 
-  if (!inbox) {
-    return (
-      <div className="mx-auto max-w-2xl px-4 py-10 text-sm text-muted-foreground">
-        Loading your invitations…
-      </div>
-    );
-  }
+  const invitationCount = inbox?.invitations.length ?? 0;
 
-  if (!selected) {
-    return (
-      <div className="mx-auto max-w-2xl space-y-3 px-4 py-10">
-        <Greeting invitationCount={0} />
-        <p className="text-sm text-muted-foreground">
-          No invitations yet. Once the operator approves a proposed circle
-          you'll see it here.
-        </p>
-        <Link
-          href="/operator"
-          className="inline-block text-xs text-muted-foreground underline"
-        >
-          Go to operator dashboard
-        </Link>
-      </div>
+  const sheetContent =
+    selected && step === "reflected" ? (
+      <ReflectionCard
+        residentId={residentId}
+        activityId={selected.activity_id}
+        title={selected.activity.title}
+      />
+    ) : selected ? (
+      <InvitationDetail
+        invitation={selected}
+        residentName={inbox?.resident.first_name ?? "Sofia"}
+        step={step}
+        reveal={reveal}
+        busy={busy}
+        error={error}
+        onAccept={accept}
+        onDecline={decline}
+        onCheckIn={checkIn}
+        onReflect={() => setStep("reflected")}
+      />
+    ) : (
+      <NoInvitations />
     );
-  }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 px-4 py-6 sm:px-6">
-      <Greeting invitationCount={inbox.invitations.length} />
+    <div className="flex h-[calc(100dvh-3.5rem)] w-full">
+      <div className="relative flex-1">
+        <MapView
+          markers={markers}
+          selectedId={selected?.id ?? null}
+          onSelect={handleSelect}
+          fallbackCenter={AMSTERDAM}
+        />
 
-      {error && (
-        <div className="rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          {error}
+        <div className="pointer-events-none absolute left-1/2 top-4 z-10 w-full max-w-md -translate-x-1/2 px-4">
+          <div className="pointer-events-auto space-y-2">
+            <Greeting
+              invitationCount={invitationCount}
+              name={inbox?.resident.first_name ?? "Sofia"}
+            />
+            <Chip tone="sage">Small groups · Hosted · No pressure</Chip>
+          </div>
         </div>
-      )}
 
-      {step === "reflected" ? (
-        <ReflectionCard
-          residentId={residentId}
-          activityId={selected.activity_id}
-          title={selected.activity.title}
-        />
-      ) : (
-        <InvitationDetail
-          invitation={selected}
-          residentName={inbox.resident.first_name}
-          step={step}
-          reveal={reveal}
-          busy={busy}
-          onAccept={accept}
-          onDecline={decline}
-          onCheckIn={checkIn}
-          onReflect={() => setStep("reflected")}
-        />
-      )}
+        {invitationCount === 0 && (
+          <div className="pointer-events-none absolute inset-0 z-0 grid place-items-center">
+            <div className="pointer-events-auto m-4 max-w-sm rounded-3xl border border-border bg-card/90 p-5 text-center shadow-[var(--shadow-soft)] backdrop-blur">
+              <p className="text-sm font-medium">No invitations yet.</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Once an operator approves a proposed circle, you'll see a calm
+                pin appear on the map.
+              </p>
+              <Link
+                href="/operator"
+                className="mt-3 inline-block text-xs text-muted-foreground underline"
+              >
+                Open operator dashboard
+              </Link>
+            </div>
+          </div>
+        )}
 
-      <p className="text-center text-xs text-muted-foreground">
-        Your attendee details stay hidden until check-in.
-      </p>
+        <div className="lg:hidden">
+          <BottomSheet open={sheetOpen} onClose={() => setSheetOpen(false)}>
+            {sheetContent}
+          </BottomSheet>
+        </div>
+      </div>
+
+      <aside className="hidden w-[440px] flex-col overflow-y-auto border-l border-border bg-card p-6 lg:flex">
+        {selected ? (
+          sheetContent
+        ) : (
+          <div className="m-auto max-w-xs text-center">
+            <p className="text-base font-medium">A few gentle options nearby</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Tap a pin on the map to see a calm invitation. Not this time is
+              always okay.
+            </p>
+          </div>
+        )}
+      </aside>
     </div>
   );
 }
@@ -213,12 +278,24 @@ function EmptyResident() {
   );
 }
 
+function NoInvitations() {
+  return (
+    <div className="space-y-3 py-4 text-center">
+      <p className="text-sm font-medium">No invitation selected.</p>
+      <p className="text-sm text-muted-foreground">
+        Tap a pin on the map to open it.
+      </p>
+    </div>
+  );
+}
+
 function InvitationDetail({
   invitation,
   residentName,
   step,
   reveal,
   busy,
+  error,
   onAccept,
   onDecline,
   onCheckIn,
@@ -229,6 +306,7 @@ function InvitationDetail({
   step: Step;
   reveal: CircleReveal | null;
   busy: string | null;
+  error: string | null;
   onAccept: () => void;
   onDecline: () => void;
   onCheckIn: () => void;
@@ -262,7 +340,7 @@ function InvitationDetail({
   const isDeclined = invitation.status === "declined";
 
   return (
-    <article className="space-y-5 rounded-3xl border border-border bg-card p-5 shadow-[var(--shadow-soft)] sm:p-6">
+    <article className="space-y-5 pb-2">
       <header className="space-y-2">
         <Chip tone="sage" icon={<Sparkles size={12} strokeWidth={1.8} />}>
           {invitation.template_code === "photography_walk"
@@ -277,6 +355,12 @@ function InvitationDetail({
           Phones welcome. Host meets you at the entrance.
         </p>
       </header>
+
+      {error && (
+        <div className="rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {error}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-y-2 rounded-2xl border border-border bg-card p-4 text-sm sm:grid-cols-2 sm:gap-x-6">
         <Row icon={<CalendarDays size={14} strokeWidth={1.8} />} label={dateLabel} />
@@ -360,12 +444,7 @@ function InvitationDetail({
       )}
 
       {step === "accepted" && (
-        <CircleForming
-          locked
-          busy={busy}
-          onCheckIn={onCheckIn}
-          attendees={[]}
-        />
+        <CircleForming locked busy={busy} onCheckIn={onCheckIn} attendees={[]} />
       )}
 
       {step === "checked_in" && reveal && (
@@ -377,6 +456,10 @@ function InvitationDetail({
           onReflect={onReflect}
         />
       )}
+
+      <p className="text-xs text-muted-foreground">
+        Your attendee details stay hidden until check-in.
+      </p>
     </article>
   );
 }
@@ -497,7 +580,7 @@ function ReflectionCard({
 
   if (saved) {
     return (
-      <article className="space-y-3 rounded-3xl border border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+      <article className="space-y-3 pb-2">
         <Chip tone="sage" icon={<Check size={12} strokeWidth={1.8} />}>
           Reflection saved
         </Chip>
@@ -512,7 +595,7 @@ function ReflectionCard({
   }
 
   return (
-    <article className="space-y-4 rounded-3xl border border-border bg-card p-6 shadow-[var(--shadow-soft)]">
+    <article className="space-y-4 pb-2">
       <header>
         <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
           Post-event reflection
